@@ -557,11 +557,16 @@ function renderTotalChart() {
   // retirement markers (vertical dashed line at each scenario's stop-work year)
   const marks = [['A', cache.A, cA]];
   if (state.compare) marks.push(['B', cache.B, cB]);
+  let markRow = 0;
   marks.forEach(([name, res, col]) => {
     if (!res.stopWork || res.stopYear >= yrs || res.stopYear <= 0) return;
     const mx = X(res.stopYear);
+    // keep the label inside the plot: anchor to the edge when the line is near one
+    const anchor = mx > d.x1 - 52 ? 'end' : (mx < d.x0 + 52 ? 'start' : 'middle');
+    const ly = d.y1 + 10 + markRow * 13;   // stagger A/B so labels don't overlap
+    markRow++;
     svgEl += `<line x1="${mx}" y1="${d.y1}" x2="${mx}" y2="${d.y0}" stroke="${col}" stroke-width="1.25" stroke-dasharray="4 3" opacity="0.7"/>`;
-    svgEl += `<text x="${mx}" y="${d.y1 + 10}" text-anchor="middle" font-size="10.5" fill="${col}" font-weight="600">🏁 ${name} stops</text>`;
+    svgEl += `<text x="${mx}" y="${ly}" text-anchor="${anchor}" font-size="10.5" fill="${col}" font-weight="600">🏁 ${name} stops · yr ${fmtYear(res.stopYear)}</text>`;
   });
 
   // crosshair placeholder
