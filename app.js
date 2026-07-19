@@ -120,8 +120,10 @@ function project(s, opts = {}) {
 
   for (let t = 0; t <= yrs; t++) {
     // fraction of the year [t, t+1] spent working (supports fractional stop years,
-    // e.g. stopYear 25.25 => you work the first quarter of that transition year)
-    const workFrac = clampNum(stopYear - t, 0, 1);
+    // e.g. stopYear 25.25 => you work the first quarter of that transition year).
+    // Use Math.min/max directly so an infinite stopYear (never-stop trajectory)
+    // yields workFrac 1 — clampNum would fold Infinity to 0 via num().
+    const workFrac = Math.max(0, Math.min(1, stopYear - t));
     const working = workFrac > 0;
     const sideOn = side > 0 && t >= sideStart && workFrac > 0;
 
@@ -279,7 +281,6 @@ function loadFormFromState() {
     el.value = s[key] == null ? '' : s[key];
   });
   document.getElementById('years-out').textContent = s.years;
-  document.getElementById('stopYear-out').textContent = fmtYear(s.stopYear);
   document.getElementById('stopWork').checked = !!s.stopWork;
   document.getElementById('retire-fields').hidden = !s.stopWork;
   // retirement trigger mode (year vs money target)
@@ -940,9 +941,6 @@ function wire() {
   document.getElementById('inputs').addEventListener('input', (e) => {
     if (e.target.id === 'years') {
       document.getElementById('years-out').textContent = e.target.value;
-    }
-    if (e.target.id === 'stopYear') {
-      document.getElementById('stopYear-out').textContent = e.target.value;
     }
     if (e.target.id === 'stopWork') {
       document.getElementById('retire-fields').hidden = !e.target.checked;

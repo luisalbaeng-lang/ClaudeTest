@@ -53,6 +53,8 @@
 }
 
 * { box-sizing: border-box; }
+/* hidden must always win over component display rules (.field/.save-row use flex) */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   font-family: var(--sans);
