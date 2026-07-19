@@ -122,6 +122,21 @@
             <p class="derived" id="cashflow-derived"></p>
           </section>
 
+          <!-- Side income -->
+          <section class="group">
+            <h2>Side income <span class="opt">(optional)</span></h2>
+            <p class="group-note">A side gig, freelancing, rental income. Set this on one scenario and bigger raises on the other to compare the two paths.</p>
+            <div class="dual">
+              <div class="field"><label for="side_amount">Side income ($/yr)</label><input type="number" id="side_amount" min="0" step="1000" value="0" /></div>
+              <div class="field"><label for="side_growth">Grows %/yr</label><input type="number" id="side_growth" step="0.1" value="5" /></div>
+            </div>
+            <div class="field">
+              <label for="side_start">Starts in year</label>
+              <input type="number" id="side_start" min="0" step="1" value="1" />
+            </div>
+            <p class="derived" id="side-derived"></p>
+          </section>
+
           <!-- 401k decision -->
           <section class="group">
             <h2>401k contributions</h2>
@@ -131,6 +146,29 @@
               <div class="field"><label for="matchCap">Employer match up to % of salary</label><input type="number" id="matchCap" min="0" max="50" step="0.5" value="4" /></div>
             </div>
             <p class="derived" id="k401-derived"></p>
+          </section>
+
+          <!-- Working life / retirement -->
+          <section class="group">
+            <h2>When you stop working</h2>
+            <label class="check-row">
+              <input type="checkbox" id="stopWork" />
+              <span>Model retirement — stop earning at some point</span>
+            </label>
+            <div id="retire-fields" class="retire-fields" hidden>
+              <div class="field">
+                <label for="stopYear">Stop working after year</label>
+                <div class="slider-row">
+                  <input type="range" id="stopYear" min="1" max="50" step="1" value="25" />
+                  <output id="stopYear-out">25</output>
+                </div>
+              </div>
+              <div class="field">
+                <label for="retireSpendPct">Retirement spending, % of today's expenses</label>
+                <input type="number" id="retireSpendPct" min="0" max="200" step="5" value="80" />
+              </div>
+              <p class="derived" id="retire-derived"></p>
+            </div>
           </section>
 
           <!-- Assumptions -->

@@ -146,6 +146,10 @@ input { font-family: inherit; }
 .sw-realestate { background: var(--c-realestate); }
 .sw-other { background: var(--c-other); }
 
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink); margin-bottom: 8px; cursor: pointer; }
+.check-row input { accent-color: var(--scn-a); width: 15px; height: 15px; }
+.retire-fields { margin-top: 4px; }
+
 .derived { font-size: 12px; color: var(--ink-2); margin: 4px 0 6px; padding: 8px 10px; background: var(--field-bg); border-radius: 8px; border: 1px solid var(--border); }
 .derived b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .derived .neg { color: var(--bad); }

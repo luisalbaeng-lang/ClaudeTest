@@ -23,6 +23,10 @@ function defaultScenario() {
     salary: 110000, salaryGrowth: 3, expenses: 60000, taxRate: 24,
     // 401k
     contrib401k: 0, matchCap: 4,
+    // side income
+    side_amount: 0, side_start: 1, side_growth: 5,
+    // retirement / stop working
+    stopWork: false, stopYear: 25, retireSpendPct: 80,
     // economy
     inflation: 3,
     // one-time events
@@ -33,7 +37,8 @@ function defaultScenario() {
 const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_re','a_other',
   'g_stocks','g_retire','g_re','g_other',
-  'salary','salaryGrowth','expenses','taxRate','contrib401k','matchCap','inflation',
+  'salary','salaryGrowth','expenses','taxRate','contrib401k','matchCap',
+  'side_amount','side_start','side_growth','stopYear','retireSpendPct','inflation',
 ];
 
 const state = {
@@ -62,9 +67,15 @@ function project(s) {
   let salary = num(s.salary);
   let expenses = num(s.expenses);
   let contrib = num(s.contrib401k);
+  let side = num(s.side_amount);
   const taxR = pct(s.taxRate);
   const matchCapR = pct(s.matchCap);
   const salG = pct(s.salaryGrowth);
+  const sideG = pct(s.side_growth);
+  const sideStart = clampInt(s.side_start, 0, yrs);
+  const stopWork = !!s.stopWork;
+  const stopYear = stopWork ? clampInt(s.stopYear, 0, yrs) : Infinity;
+  const retireSpend = pct(s.retireSpendPct);   // fraction of pre-retirement expenses
 
   // index events by year for quick lookup
   const evByYear = {};
@@ -76,15 +87,25 @@ function project(s) {
   const rows = [];
   let firstNegSavingsYear = null;
   let firstMillionYear = null;
+  let depletionYear = null;        // year liquid assets can't cover spending
 
   for (let t = 0; t <= yrs; t++) {
-    // --- cash flow for THIS year (year 0 = today, no flow applied yet) ---
-    const taxableIncome = Math.max(0, salary - contrib);
-    const takeHome = taxableIncome * (1 - taxR);
-    const employerMatch = Math.min(contrib, salary * matchCapR);
-    const brokerageSavings = takeHome - expenses; // may be negative
+    const working = t < stopYear;
+    const sideActive = side > 0 && t >= sideStart && working;
 
-    if (t > 0 && brokerageSavings < 0 && firstNegSavingsYear === null) {
+    // --- cash flow for year t ---
+    const salThis  = working ? salary : 0;
+    const sideThis = sideActive ? side : 0;
+    const contribThis = working ? contrib : 0;
+    const gross = salThis + sideThis;
+    const taxableIncome = Math.max(0, gross - contribThis);
+    const takeHome = taxableIncome * (1 - taxR);
+    const employerMatch = working ? Math.min(contribThis, salThis * matchCapR) : 0;
+    const expThis = working ? expenses : expenses * retireSpend;
+    const brokerageSavings = takeHome - expThis;   // negative => draw down
+
+    // flag the first shortfall WHILE still working (in retirement, negative is expected)
+    if (t > 0 && working && brokerageSavings < 0 && firstNegSavingsYear === null) {
       firstNegSavingsYear = t;
     }
 
@@ -98,8 +119,8 @@ function project(s) {
       realestate: bal.realestate, other: bal.other,
       total,
       realFactor,
-      salary, expenses,
-      contrib, employerMatch, brokerageSavings,
+      salary: salThis, sideIncome: sideThis, expenses: expThis,
+      contrib: contribThis, employerMatch, brokerageSavings, working,
     });
 
     if (firstMillionYear === null && total >= 1e6) firstMillionYear = t;
@@ -113,24 +134,28 @@ function project(s) {
     bal.other      *= (1 + gr.other);
 
     // 2) contributions added at year end
-    bal.retire += contrib + employerMatch;
+    bal.retire += contribThis + employerMatch;
     if (brokerageSavings >= 0) {
       bal.stocks += brokerageSavings;
     } else {
-      // shortfall drawn from brokerage, then cash/other
+      // shortfall drawn in order: brokerage -> cash/other -> 401k (home equity untouched)
       let need = -brokerageSavings;
-      const fromStocks = Math.min(bal.stocks, need);
-      bal.stocks -= fromStocks; need -= fromStocks;
-      bal.other = Math.max(0, bal.other - need);
+      for (const k of ['stocks', 'other', 'retire']) {
+        const take = Math.min(bal[k], need);
+        bal[k] -= take; need -= take;
+        if (need <= 1e-6) break;
+      }
+      if (need > 1 && depletionYear === null) depletionYear = t + 1;
     }
 
     // 3) one-time events applied at the END of year t (affect year t+1 snapshot)
     (evByYear[t + 1] || []).forEach(e => applyEvent(bal, e));
 
-    // 4) grow salary & expenses for next year
+    // 4) grow the drivers for next year
     salary *= (1 + salG);
     expenses *= (1 + inflR);        // expenses track inflation
-    contrib *= (1 + salG);          // contribution grows with pay (bounded by salary later)
+    side *= (1 + sideG);
+    contrib *= (1 + salG);          // contribution grows with pay (bounded by salary)
     if (contrib > salary) contrib = salary;
   }
 
@@ -139,6 +164,8 @@ function project(s) {
     final: rows[rows.length - 1],
     firstNegSavingsYear,
     firstMillionYear,
+    depletionYear,
+    stopWork, stopYear,
     inflR,
   };
 }
@@ -196,6 +223,9 @@ function loadFormFromState() {
     el.value = s[key] == null ? '' : s[key];
   });
   document.getElementById('years-out').textContent = s.years;
+  document.getElementById('stopYear-out').textContent = s.stopYear;
+  document.getElementById('stopWork').checked = !!s.stopWork;
+  document.getElementById('retire-fields').hidden = !s.stopWork;
   renderEvents();
   // toolbar state
   document.querySelectorAll('.stab').forEach(b =>
@@ -226,6 +256,7 @@ function readFormIntoState() {
       s[key] = el.value === '' ? 0 : num(el.value);
     }
   });
+  s.stopWork = document.getElementById('stopWork').checked;
   s.years = clampInt(s.years, 1, 50);
 }
 
@@ -291,6 +322,26 @@ function renderDerived() {
   kd.innerHTML = num(s.contrib401k) > 0
     ? `Employer adds <b>${fmtFull(match)}/yr</b> · total into 401k ≈ <b>${fmtFull(num(s.contrib401k)+match)}/yr</b>`
     : `No 401k contribution set. Employer match only applies when you contribute.`;
+
+  const sd = document.getElementById('side-derived');
+  if (num(s.side_amount) > 0) {
+    const lastYr = s.stopWork ? Math.min(s.years, clampInt(s.stopYear,0,s.years)) : s.years;
+    const start = clampInt(s.side_start,0,s.years);
+    const endVal = num(s.side_amount) * Math.pow(1+pct(s.side_growth), Math.max(0, lastYr-start));
+    sd.innerHTML = `Adds <b>${fmtFull(num(s.side_amount))}/yr</b> from year ${start} (taxed, then flows to savings)` +
+      (s.stopWork ? `, until you stop working in year ${lastYr}` : '') +
+      `. Reaches <b>${fmtFull(endVal)}/yr</b> by then.`;
+  } else {
+    sd.innerHTML = `No side income. Try it on Scenario B against bigger raises on A.`;
+  }
+
+  const rd = document.getElementById('retire-derived');
+  if (s.stopWork) {
+    const age = s.currentAge != null ? ' (age ' + (Number(s.currentAge) + clampInt(s.stopYear,0,s.years)) + ')' : '';
+    rd.innerHTML = `You stop earning after <b>year ${clampInt(s.stopYear,0,s.years)}${age}</b>. ` +
+      `Spending then becomes <b>${fmtFull(num(s.expenses)*pct(s.retireSpendPct))}/yr</b> ` +
+      `(today's terms) and is drawn from savings.`;
+  }
 }
 
 function renderStats() {
@@ -423,6 +474,16 @@ function renderTotalChart() {
     svgEl += endDot(X(yrs), Y(seriesB[yrs]), cB);
   }
   svgEl += endDot(X(yrs), Y(seriesA[yrs]), cA);
+
+  // retirement markers (vertical dashed line at each scenario's stop-work year)
+  const marks = [['A', cache.A, cA]];
+  if (state.compare) marks.push(['B', cache.B, cB]);
+  marks.forEach(([name, res, col]) => {
+    if (!res.stopWork || res.stopYear >= yrs || res.stopYear <= 0) return;
+    const mx = X(res.stopYear);
+    svgEl += `<line x1="${mx}" y1="${d.y1}" x2="${mx}" y2="${d.y0}" stroke="${col}" stroke-width="1.25" stroke-dasharray="4 3" opacity="0.7"/>`;
+    svgEl += `<text x="${mx}" y="${d.y1 + 10}" text-anchor="middle" font-size="10.5" fill="${col}" font-weight="600">🏁 ${name} stops</text>`;
+  });
 
   // crosshair placeholder
   svgEl += `<line class="crosshair" id="xh-total" x1="0" y1="${d.y1}" x2="0" y2="${d.y0}" style="opacity:0"/>`;
@@ -592,6 +653,25 @@ function renderInsights() {
     }
   }
 
+  // retirement feasibility (per scenario that models it)
+  [['A', A, state.A], ['B', B, state.B]].forEach(([name, res, sc]) => {
+    if (!state.compare && name !== state.active) return;
+    if (!res.stopWork) return;
+    const sy = res.stopYear;
+    const stopAge = sc.currentAge != null ? Number(sc.currentAge) + sy : null;
+    const ageTxt = stopAge != null ? ` (age ${stopAge})` : '';
+    if (res.depletionYear != null && res.depletionYear <= yrs) {
+      const depAge = sc.currentAge != null ? Number(sc.currentAge) + res.depletionYear : null;
+      out.push(ins('warn','⛔',`<b>Scenario ${name}:</b> you stop working year ${sy}${ageTxt}, but savings run dry by <b>year ${res.depletionYear}${depAge!=null?` (age ${depAge})`:''}</b> — expenses outlast your money. Work longer, spend less in retirement, or save more before then.`));
+    } else {
+      const endReal = basisVal(res.final.total, res.final.realFactor);
+      out.push(ins('good','✅',`<b>Scenario ${name}:</b> you can stop working year ${sy}${ageTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
+    }
+    if (stopAge != null && stopAge < 60 && num(sc.a_retire) > 0) {
+      out.push(ins('warn','📋',`Scenario ${name} taps retirement savings before age 60 — real 401k/IRA withdrawals before 59½ usually carry a 10% penalty this model ignores. Bridge early years with brokerage/cash if you can.`));
+    }
+  });
+
   // inflation reality check
   const nominalFinal = fa.total;
   const realFinal = fa.total / fa.realFactor;
@@ -664,6 +744,12 @@ function wire() {
   document.getElementById('inputs').addEventListener('input', (e) => {
     if (e.target.id === 'years') {
       document.getElementById('years-out').textContent = e.target.value;
+    }
+    if (e.target.id === 'stopYear') {
+      document.getElementById('stopYear-out').textContent = e.target.value;
+    }
+    if (e.target.id === 'stopWork') {
+      document.getElementById('retire-fields').hidden = !e.target.checked;
     }
     // event rows
     if (e.target.dataset && e.target.dataset.k) {

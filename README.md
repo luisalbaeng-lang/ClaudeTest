@@ -18,6 +18,14 @@ Open `index.html` in any browser — no build step, no server, no internet.
 - **The 401k decision** — route pre-tax dollars into the 401k instead of the
   brokerage, with employer match up to a % of salary. Pre-tax + match is the
   headline "decision" the compare view is built for.
+- **When you stop working** — set a retirement year (shown as an age). Salary and
+  401k contributions stop, spending switches to a retirement level (% of today's
+  expenses), and the model draws *down* your assets — brokerage, then cash, then
+  401k — to cover it. The read-out tells you whether the money lasts or runs dry,
+  and the chart marks the year with a 🏁 line.
+- **Side income** — a side gig / freelancing / rental stream with its own start
+  year and growth rate. Put it on one scenario and bigger raises on the other to
+  compare **career growth vs. a side gig** head-to-head.
 - **Inflation** — toggle between **nominal** dollars and **real** (today's)
   dollars everywhere. The read-out shows how much inflation quietly erodes.
 - **One-time decisions** — a list of "in year N, add/take $X to/from bucket Y"
@@ -48,7 +56,7 @@ expense growth are applied annually at year-end. See the disclaimer in-app.
 
 ## Ideas for future inputs
 
-Sequencing/withdrawal (retirement drawdown), mortgage & debt schedules,
-Roth vs. Traditional tax treatment, Social Security, and Monte-Carlo return
-ranges (p10/p50/p90 bands) are the natural next additions — the engine in
-`app.js` (`project()`) is structured to grow into them.
+Mortgage & debt schedules, Roth vs. Traditional tax treatment, Social Security,
+early-withdrawal penalties, and Monte-Carlo return ranges (p10/p50/p90 bands)
+are the natural next additions — the engine in `app.js` (`project()`) is
+structured to grow into them.
