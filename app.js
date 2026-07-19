@@ -61,10 +61,19 @@ function resolveStopYear(s) {
     const target = num(s.retireTarget);
     if (target <= 0) return Infinity;
     const accum = project(s, { overrideStopYear: Infinity }); // never-stop trajectory
-    for (const r of accum.rows) if (r.total >= target) return r.year;
+    const rows = accum.rows;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].total >= target) {
+        if (i === 0) return 0;
+        // interpolate within [i-1, i] then round to the nearest quarter-year
+        const prev = rows[i - 1].total, cur = rows[i].total;
+        const f = cur > prev ? (target - prev) / (cur - prev) : 0;
+        return Math.round(((i - 1) + Math.max(0, Math.min(1, f))) * 4) / 4;
+      }
+    }
     return null; // not reached in horizon
   }
-  return clampInt(s.stopYear, 0, s.years);
+  return clampNum(s.stopYear, 0, s.years);
 }
 
 function project(s, opts = {}) {
@@ -110,22 +119,26 @@ function project(s, opts = {}) {
   let depletionYear = null;        // year liquid assets can't cover spending
 
   for (let t = 0; t <= yrs; t++) {
-    const working = t < stopYear;
-    const sideActive = side > 0 && t >= sideStart && working;
+    // fraction of the year [t, t+1] spent working (supports fractional stop years,
+    // e.g. stopYear 25.25 => you work the first quarter of that transition year)
+    const workFrac = clampNum(stopYear - t, 0, 1);
+    const working = workFrac > 0;
+    const sideOn = side > 0 && t >= sideStart && workFrac > 0;
 
-    // --- cash flow for year t ---
-    const salThis  = working ? salary : 0;
-    const sideThis = sideActive ? side : 0;
-    const contribThis = working ? contrib : 0;
+    // --- cash flow for year t (income/contributions prorated by fraction worked) ---
+    const salThis  = salary * workFrac;
+    const sideThis = sideOn ? side * workFrac : 0;
+    const contribThis = contrib * workFrac;
     const gross = salThis + sideThis;
     const taxableIncome = Math.max(0, gross - contribThis);
     const takeHome = taxableIncome * (1 - taxR);
-    const employerMatch = working ? Math.min(contribThis, salThis * matchCapR) : 0;
-    const expThis = working ? expenses : expenses * retireSpend;
+    const employerMatch = Math.min(contribThis, salThis * matchCapR);
+    // expenses: working level for the worked fraction, retirement level for the rest
+    const expThis = expenses * workFrac + expenses * retireSpend * (1 - workFrac);
     const brokerageSavings = takeHome - expThis;   // negative => draw down
 
-    // flag the first shortfall WHILE still working (in retirement, negative is expected)
-    if (t > 0 && working && brokerageSavings < 0 && firstNegSavingsYear === null) {
+    // flag the first shortfall WHILE fully working (in retirement, negative is expected)
+    if (t > 0 && workFrac >= 1 && brokerageSavings < 0 && firstNegSavingsYear === null) {
       firstNegSavingsYear = t;
     }
 
@@ -179,6 +192,18 @@ function project(s, opts = {}) {
     if (contrib > salary) contrib = salary;
   }
 
+  // net worth at the (possibly fractional) stop-working moment, interpolated
+  let atStop = null;
+  if (stopWorkActive) {
+    const lo = Math.floor(stopYear);
+    const frac = stopYear - lo;
+    const loRow = rows[lo];
+    if (loRow) {
+      const hiRow = rows[Math.min(lo + 1, yrs)] || loRow;
+      atStop = loRow.total + frac * (hiRow.total - loRow.total);
+    }
+  }
+
   return {
     rows,
     final: rows[rows.length - 1],
@@ -190,7 +215,7 @@ function project(s, opts = {}) {
     targetMode,
     targetReached,
     targetValue: num(s.retireTarget),
-    atStop: (stopWorkActive && rows[stopYear]) ? rows[stopYear].total : null,
+    atStop,
     inflR,
   };
 }
@@ -216,6 +241,12 @@ function basisVal(v, realFactor) {
 function num(v) { const n = parseFloat(v); return isFinite(n) ? n : 0; }
 function pct(v) { return num(v) / 100; }
 function clampInt(v, lo, hi) { return Math.max(lo, Math.min(hi, Math.round(num(v)))); }
+function clampNum(v, lo, hi) { return Math.max(lo, Math.min(hi, num(v))); }
+// format a possibly-fractional year: 25 -> "25", 25.25 -> "25.25", 25.5 -> "25.5"
+function fmtYear(v) {
+  const r = Math.round(num(v) * 100) / 100;
+  return Number.isInteger(r) ? String(r) : String(r);
+}
 
 function fmtMoney(v) {
   const neg = v < 0; v = Math.abs(v);
@@ -248,7 +279,7 @@ function loadFormFromState() {
     el.value = s[key] == null ? '' : s[key];
   });
   document.getElementById('years-out').textContent = s.years;
-  document.getElementById('stopYear-out').textContent = s.stopYear;
+  document.getElementById('stopYear-out').textContent = fmtYear(s.stopYear);
   document.getElementById('stopWork').checked = !!s.stopWork;
   document.getElementById('retire-fields').hidden = !s.stopWork;
   // retirement trigger mode (year vs money target)
@@ -358,11 +389,13 @@ function renderDerived() {
 
   const sd = document.getElementById('side-derived');
   if (num(s.side_amount) > 0) {
-    const lastYr = s.stopWork ? Math.min(s.years, clampInt(s.stopYear,0,s.years)) : s.years;
+    const res0 = cache[state.active];
+    const stopY = (res0 && res0.stopWork) ? res0.stopYear : (s.stopWork ? clampNum(s.stopYear,0,s.years) : s.years);
+    const lastYr = s.stopWork ? Math.min(s.years, stopY) : s.years;
     const start = clampInt(s.side_start,0,s.years);
     const endVal = num(s.side_amount) * Math.pow(1+pct(s.side_growth), Math.max(0, lastYr-start));
     sd.innerHTML = `Adds <b>${fmtFull(num(s.side_amount))}/yr</b> from year ${start} (taxed, then flows to savings)` +
-      (s.stopWork ? `, until you stop working in year ${lastYr}` : '') +
+      (s.stopWork ? `, until you stop working in year ${fmtYear(lastYr)}` : '') +
       `. Reaches <b>${fmtFull(endVal)}/yr</b> by then.`;
   } else {
     sd.innerHTML = `No side income. Try it on Scenario B against bigger raises on A.`;
@@ -372,7 +405,7 @@ function renderDerived() {
   if (s.stopWork) {
     const res = cache[state.active] || project(s);
     const spend = `Spending then becomes <b>${fmtFull(num(s.expenses)*pct(s.retireSpendPct))}/yr</b> (today's terms), drawn from savings.`;
-    const ageOf = y => s.currentAge != null ? ' (age ' + (Number(s.currentAge) + y) + ')' : '';
+    const ageOf = y => s.currentAge != null ? ' (age ' + fmtYear(Number(s.currentAge) + y) + ')' : '';
     if (res.targetMode) {
       if (!res.targetReached) {
         rd.innerHTML = `You don't reach <b>${fmtFull(res.targetValue)}</b> within ${s.years} years. ` +
@@ -380,11 +413,11 @@ function renderDerived() {
       } else if (res.stopYear === 0) {
         rd.innerHTML = `You already have <b>${fmtFull(res.targetValue)}</b> — you could stop working now. ` + spend;
       } else {
-        rd.innerHTML = `You'd hit <b>${fmtFull(res.targetValue)}</b> in <b>year ${res.stopYear}${ageOf(res.stopYear)}</b> — ` +
+        rd.innerHTML = `You'd hit <b>${fmtFull(res.targetValue)}</b> in <b>year ${fmtYear(res.stopYear)}${ageOf(res.stopYear)}</b> — ` +
           `the earliest you could stop working. ` + spend;
       }
     } else {
-      rd.innerHTML = `You stop earning after <b>year ${res.stopYear}${ageOf(res.stopYear)}</b>. ` + spend;
+      rd.innerHTML = `You stop earning after <b>year ${fmtYear(res.stopYear)}${ageOf(res.stopYear)}</b>. ` + spend;
     }
   }
 }
@@ -712,14 +745,14 @@ function renderInsights() {
 
     const sy = res.stopYear;
     const stopAge = sc.currentAge != null ? Number(sc.currentAge) + sy : null;
-    const ageTxt = stopAge != null ? ` (age ${stopAge})` : '';
+    const ageTxt = stopAge != null ? ` (age ${fmtYear(stopAge)})` : '';
     const targetTxt = res.targetMode ? `, hitting your <b>${fmtMoney(res.targetValue)}</b> target,` : '';
     if (res.depletionYear != null && res.depletionYear <= yrs) {
       const depAge = sc.currentAge != null ? Number(sc.currentAge) + res.depletionYear : null;
-      out.push(ins('warn','⛔',`<b>Scenario ${name}:</b> you stop working year ${sy}${ageTxt}${targetTxt} but savings run dry by <b>year ${res.depletionYear}${depAge!=null?` (age ${depAge})`:''}</b> — expenses outlast your money. Work longer, spend less in retirement, or raise the target.`));
+      out.push(ins('warn','⛔',`<b>Scenario ${name}:</b> you stop working year ${fmtYear(sy)}${ageTxt}${targetTxt} but savings run dry by <b>year ${res.depletionYear}${depAge!=null?` (age ${depAge})`:''}</b> — expenses outlast your money. Work longer, spend less in retirement, or raise the target.`));
     } else {
       const endReal = basisVal(res.final.total, res.final.realFactor);
-      out.push(ins('good','✅',`<b>Scenario ${name}:</b> you could stop working <b>year ${sy}</b>${ageTxt}${targetTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
+      out.push(ins('good','✅',`<b>Scenario ${name}:</b> you could stop working <b>year ${fmtYear(sy)}</b>${ageTxt}${targetTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
     }
     if (stopAge != null && stopAge < 60 && num(sc.a_retire) > 0) {
       out.push(ins('warn','📋',`Scenario ${name} taps retirement savings before age 60 — real 401k/IRA withdrawals before 59½ usually carry a 10% penalty this model ignores. Bridge early years with brokerage/cash if you can.`));
@@ -851,7 +884,7 @@ function savedSummary(sc) {
   if (num(sc.contrib401k) > 0) bits.push('401k ' + fmtMoney(num(sc.contrib401k)));
   if (num(sc.side_amount) > 0) bits.push('side ' + fmtMoney(num(sc.side_amount)));
   if (sc.stopWork && res.targetMode && !res.targetReached) bits.push('target not reached');
-  else if (res.stopWork) bits.push('retires yr ' + stopY);
+  else if (res.stopWork) bits.push('retires yr ' + fmtYear(stopY));
   return { finalV, atStop, stopY, meta: bits.join(' · ') };
 }
 
@@ -864,7 +897,7 @@ function renderSavedList() {
   wrap.innerHTML = Saved.list.map(item => {
     const { finalV, atStop, stopY, meta } = savedSummary(item.scenario);
     const stopFig = atStop != null
-      ? `<span class="sc-stop" title="Net worth when earning stops">${fmtMoney(atStop)} <span class="fl">🏁 yr ${stopY}</span></span>`
+      ? `<span class="sc-stop" title="Net worth when earning stops">${fmtMoney(atStop)} <span class="fl">🏁 yr ${fmtYear(stopY)}</span></span>`
       : '';
     return `<div class="saved-card" data-id="${item.id}">
       <div class="sc-top">

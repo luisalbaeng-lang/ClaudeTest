@@ -19,7 +19,9 @@ Open `index.html` in any browser — no build step, no server, no internet.
   brokerage, with employer match up to a % of salary. Pre-tax + match is the
   headline "decision" the compare view is built for.
 - **When you stop working** — two ways to set retirement:
-  - **Pick a year** — choose the year you stop (shown as an age).
+  - **Pick a year** — choose the year you stop, in **quarter-year (0.25) steps**,
+    shown as an age. The transition year is prorated: income, contributions, and
+    expenses reflect the fraction of that year actually worked.
   - **Reach a $ target** — enter a target net worth and the app finds the
     *earliest year* your projection reaches it — your financial-independence
     year. If the target isn't reached within the horizon, it says so.
