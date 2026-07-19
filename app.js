@@ -789,13 +789,19 @@ function loadSavedInto(id, slot) {
 function savedSummary(sc) {
   const res = project(sc);
   const finalV = res.final.total;                 // nominal end value
+  let atStop = null, stopY = null;
+  if (sc.stopWork) {
+    stopY = clampInt(sc.stopYear, 0, sc.years);
+    const row = res.rows[stopY];                  // net worth the year earning stops
+    atStop = row ? row.total : null;
+  }
   const bits = [];
   bits.push(sc.years + ' yr');
   bits.push('salary ' + fmtMoney(num(sc.salary)));
   if (num(sc.contrib401k) > 0) bits.push('401k ' + fmtMoney(num(sc.contrib401k)));
   if (num(sc.side_amount) > 0) bits.push('side ' + fmtMoney(num(sc.side_amount)));
-  if (sc.stopWork) bits.push('retires yr ' + clampInt(sc.stopYear, 0, sc.years));
-  return { finalV, meta: bits.join(' · ') };
+  if (sc.stopWork) bits.push('retires yr ' + stopY);
+  return { finalV, atStop, stopY, meta: bits.join(' · ') };
 }
 
 function renderSavedList() {
@@ -805,13 +811,19 @@ function renderSavedList() {
   count.textContent = Saved.list.length;
   empty.hidden = Saved.list.length > 0;
   wrap.innerHTML = Saved.list.map(item => {
-    const { finalV, meta } = savedSummary(item.scenario);
+    const { finalV, atStop, stopY, meta } = savedSummary(item.scenario);
+    const stopFig = atStop != null
+      ? `<span class="sc-stop" title="Net worth when earning stops">${fmtMoney(atStop)} <span class="fl">🏁 yr ${stopY}</span></span>`
+      : '';
     return `<div class="saved-card" data-id="${item.id}">
       <div class="sc-top">
         <span class="sc-name">${escapeHTML(item.name)}</span>
-        <span class="sc-final">${fmtMoney(finalV)}</span>
+        <div class="sc-figs">
+          <span class="sc-final">${fmtMoney(finalV)} <span class="fl">end</span></span>
+          ${stopFig}
+        </div>
       </div>
-      <div class="sc-meta">${meta} → end net worth (nominal)</div>
+      <div class="sc-meta">${meta} · nominal $</div>
       <div class="sc-actions">
         <button class="load-a" data-act="loadA">Load → A</button>
         <button class="load-b" data-act="loadB">Load → B</button>
