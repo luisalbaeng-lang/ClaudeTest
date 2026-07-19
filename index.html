@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trajectory — Net Worth Projection Simulator</title>
+  <meta name="description" content="Model your net worth over time and see how financial decisions change your final number." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">📈</span>
+        <div>
+          <h1>Trajectory</h1>
+          <p class="tagline">See how today's decisions change tomorrow's number.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="unit-toggle" role="group" aria-label="Dollar basis">
+          <button id="btn-nominal" class="seg active" data-basis="nominal">Nominal $</button>
+          <button id="btn-real" class="seg" data-basis="real">Real $ (today)</button>
+        </div>
+        <button id="btn-theme" class="icon-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+        <button id="btn-reset" class="ghost-btn" title="Reset all inputs">Reset</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <!-- ============ INPUT PANEL ============ -->
+      <aside class="panel" id="input-panel">
+        <div class="scenario-switch">
+          <div class="scenario-tabs" role="tablist">
+            <button class="stab active" data-scn="A" role="tab">
+              <span class="dot dot-a"></span> Scenario A
+            </button>
+            <button class="stab" data-scn="B" role="tab">
+              <span class="dot dot-b"></span> Scenario B
+            </button>
+          </div>
+          <label class="compare-toggle">
+            <input type="checkbox" id="compare-on" checked />
+            <span>Compare A vs B</span>
+          </label>
+        </div>
+        <p class="scenario-hint" id="scenario-hint">
+          Editing <strong>Scenario A</strong>. Duplicate it to B, then change one
+          thing (a raise, a new 401k, a home purchase) to see the impact.
+        </p>
+        <div class="scenario-tools">
+          <button class="mini-btn" id="copy-a-b">Copy A → B</button>
+          <button class="mini-btn" id="copy-b-a">Copy B → A</button>
+        </div>
+
+        <form id="inputs" autocomplete="off">
+          <!-- Horizon -->
+          <section class="group">
+            <h2>Time horizon</h2>
+            <div class="field">
+              <label for="years">Years to project</label>
+              <div class="slider-row">
+                <input type="range" id="years" min="1" max="50" step="1" value="30" />
+                <output id="years-out">30</output>
+              </div>
+            </div>
+            <div class="field">
+              <label for="currentAge">Current age <span class="opt">(optional)</span></label>
+              <input type="number" id="currentAge" min="0" max="100" step="1" placeholder="e.g. 32" />
+            </div>
+          </section>
+
+          <!-- Assets -->
+          <section class="group">
+            <h2>What you own today</h2>
+            <p class="group-note">Starting balances and the annual growth you expect from each.</p>
+
+            <div class="asset-row" data-asset="stocks">
+              <div class="asset-head"><span class="swatch sw-stocks"></span> Brokerage / stocks (post-tax)</div>
+              <div class="dual">
+                <div class="field"><label>Value ($)</label><input type="number" id="a_stocks" min="0" step="1000" value="40000" /></div>
+                <div class="field"><label>Growth %/yr</label><input type="number" id="g_stocks" step="0.1" value="7" /></div>
+              </div>
+            </div>
+
+            <div class="asset-row" data-asset="retire">
+              <div class="asset-head"><span class="swatch sw-retire"></span> 401k / retirement (pre-tax)</div>
+              <div class="dual">
+                <div class="field"><label>Value ($)</label><input type="number" id="a_retire" min="0" step="1000" value="60000" /></div>
+                <div class="field"><label>Growth %/yr</label><input type="number" id="g_retire" step="0.1" value="7" /></div>
+              </div>
+            </div>
+
+            <div class="asset-row" data-asset="realestate">
+              <div class="asset-head"><span class="swatch sw-realestate"></span> Real estate (equity)</div>
+              <div class="dual">
+                <div class="field"><label>Value ($)</label><input type="number" id="a_re" min="0" step="1000" value="120000" /></div>
+                <div class="field"><label>Growth %/yr</label><input type="number" id="g_re" step="0.1" value="4" /></div>
+              </div>
+            </div>
+
+            <div class="asset-row" data-asset="other">
+              <div class="asset-head"><span class="swatch sw-other"></span> Cash &amp; other assets</div>
+              <div class="dual">
+                <div class="field"><label>Value ($)</label><input type="number" id="a_other" min="0" step="1000" value="20000" /></div>
+                <div class="field"><label>Growth %/yr</label><input type="number" id="g_other" step="0.1" value="1" /></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Cash flow -->
+          <section class="group">
+            <h2>Income &amp; spending</h2>
+            <div class="dual">
+              <div class="field"><label for="salary">Gross salary ($/yr)</label><input type="number" id="salary" min="0" step="1000" value="110000" /></div>
+              <div class="field"><label for="salaryGrowth">Raises %/yr</label><input type="number" id="salaryGrowth" step="0.1" value="3" /></div>
+            </div>
+            <div class="dual">
+              <div class="field"><label for="expenses">Expenses ($/yr)</label><input type="number" id="expenses" min="0" step="1000" value="60000" /></div>
+              <div class="field"><label for="taxRate">Eff. tax %</label><input type="number" id="taxRate" min="0" max="60" step="0.5" value="24" /></div>
+            </div>
+            <p class="derived" id="cashflow-derived"></p>
+          </section>
+
+          <!-- 401k decision -->
+          <section class="group">
+            <h2>401k contributions</h2>
+            <p class="group-note">The classic decision: route pre-tax money here instead of your brokerage.</p>
+            <div class="dual">
+              <div class="field"><label for="contrib401k">Your contribution ($/yr)</label><input type="number" id="contrib401k" min="0" step="500" value="0" /></div>
+              <div class="field"><label for="matchCap">Employer match up to % of salary</label><input type="number" id="matchCap" min="0" max="50" step="0.5" value="4" /></div>
+            </div>
+            <p class="derived" id="k401-derived"></p>
+          </section>
+
+          <!-- Assumptions -->
+          <section class="group">
+            <h2>Economy</h2>
+            <div class="field">
+              <label for="inflation">Inflation %/yr</label>
+              <input type="number" id="inflation" min="0" step="0.1" value="3" />
+            </div>
+          </section>
+
+          <!-- Events -->
+          <section class="group">
+            <h2>One-time decisions <span class="opt">(optional)</span></h2>
+            <p class="group-note">Windfalls, big purchases, moving money between buckets — the "what if I did X in year N" list.</p>
+            <div id="events-list"></div>
+            <button type="button" class="mini-btn add" id="add-event">+ Add event</button>
+          </section>
+        </form>
+      </aside>
+
+      <!-- ============ RESULTS ============ -->
+      <main class="results">
+        <section class="stat-strip" id="stat-strip"></section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2>Net worth over time</h2>
+              <p class="card-sub" id="chart-sub"></p>
+            </div>
+            <div class="legend" id="legend-total"></div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="chart-total" class="chart" preserveAspectRatio="none" role="img" aria-label="Net worth projection"></svg>
+            <div class="tooltip" id="tt-total" hidden></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2>What it's made of</h2>
+              <p class="card-sub">Composition of <span id="compo-scn">Scenario A</span> by asset class.</p>
+            </div>
+            <div class="legend" id="legend-compo"></div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="chart-compo" class="chart" preserveAspectRatio="none" role="img" aria-label="Asset composition"></svg>
+            <div class="tooltip" id="tt-compo" hidden></div>
+          </div>
+        </section>
+
+        <section class="card" id="insight-card">
+          <div class="card-head"><h2>Read-out</h2></div>
+          <div id="insights"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Year by year</h2>
+            <button class="ghost-btn" id="toggle-table">Show table</button>
+          </div>
+          <div id="table-wrap" hidden></div>
+        </section>
+
+        <footer class="disclaimer">
+          Estimates only — not financial advice. Real returns vary year to year;
+          this model uses smooth averages. See the read-out for what's simplified.
+        </footer>
+      </main>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
