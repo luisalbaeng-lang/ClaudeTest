@@ -30,6 +30,12 @@
     <div class="layout">
       <!-- ============ INPUT PANEL ============ -->
       <aside class="panel" id="input-panel">
+        <div class="view-tabs" role="tablist">
+          <button id="vt-inputs" class="vtab active" role="tab">Inputs</button>
+          <button id="vt-saved" class="vtab" role="tab">Saved <span id="saved-count" class="badge">0</span></button>
+        </div>
+
+        <div id="view-inputs">
         <div class="scenario-switch">
           <div class="scenario-tabs" role="tablist">
             <button class="stab active" data-scn="A" role="tab">
@@ -49,8 +55,14 @@
           thing (a raise, a new 401k, a home purchase) to see the impact.
         </p>
         <div class="scenario-tools">
+          <button class="mini-btn" id="save-scn">💾 Save</button>
           <button class="mini-btn" id="copy-a-b">Copy A → B</button>
           <button class="mini-btn" id="copy-b-a">Copy B → A</button>
+        </div>
+        <div class="save-row" id="save-row" hidden>
+          <input type="text" id="save-name" placeholder="Name this scenario (e.g. Retire at 55)" maxlength="40" />
+          <button class="mini-btn primary" id="save-confirm">Save</button>
+          <button class="mini-btn" id="save-cancel">Cancel</button>
         </div>
 
         <form id="inputs" autocomplete="off">
@@ -188,6 +200,19 @@
             <button type="button" class="mini-btn add" id="add-event">+ Add event</button>
           </section>
         </form>
+        </div><!-- /view-inputs -->
+
+        <div id="view-saved" hidden>
+          <p class="saved-intro">
+            Your saved scenarios live here (stored in this browser). Load any one
+            into slot <strong>A</strong> or <strong>B</strong> to compare it against another.
+          </p>
+          <div id="saved-list"></div>
+          <p class="saved-empty" id="saved-empty" hidden>
+            Nothing saved yet. Go to <strong>Inputs</strong>, set up a scenario, and hit
+            <strong>💾 Save</strong>.
+          </p>
+        </div>
       </aside>
 
       <!-- ============ RESULTS ============ -->

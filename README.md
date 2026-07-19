@@ -33,6 +33,10 @@ Open `index.html` in any browser — no build step, no server, no internet.
 - **A vs B scenarios** — edit two full scenarios, copy one onto the other, then
   change a single input and watch the two paths (and the gap between them) on
   the chart. Ships pre-loaded with A = no 401k vs B = maxed 401k.
+- **Saved library** — a **Saved** tab (in the left panel) stores named scenarios
+  in your browser (`localStorage`), so they survive reloads. Save the scenario
+  you're editing, then load any saved one into slot A or B to compare. Each card
+  shows a summary and its projected end net worth; rename and delete supported.
 
 ## What you get
 

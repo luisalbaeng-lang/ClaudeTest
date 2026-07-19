@@ -737,6 +737,106 @@ function renderTable() {
 }
 
 /* ============================================================
+   SAVED SCENARIOS (localStorage-backed library)
+   ============================================================ */
+const STORE_KEY = 'trajectory_saved_v1';
+const Saved = {
+  list: [],
+  mem: false,           // fall back to memory if localStorage blocked
+  load() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      this.list = raw ? JSON.parse(raw) : [];
+    } catch (e) { this.list = []; this.mem = true; }
+  },
+  persist() {
+    if (this.mem) return;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(this.list)); }
+    catch (e) { this.mem = true; }
+  },
+  add(name, scenario) {
+    this.list.unshift({
+      id: 's' + Date.now() + Math.floor(Math.random() * 1000),
+      name: name,
+      savedAt: Date.now(),
+      scenario: JSON.parse(JSON.stringify(scenario)),
+    });
+    this.persist();
+  },
+  remove(id) { this.list = this.list.filter(x => x.id !== id); this.persist(); },
+  rename(id, name) { const it = this.list.find(x => x.id === id); if (it) { it.name = name; this.persist(); } },
+  get(id) { return this.list.find(x => x.id === id); },
+};
+
+function saveActiveScenario(name) {
+  readFormIntoState();
+  Saved.add(name, scn());
+  renderSavedList();
+  flash('Saved “' + name + '”');
+}
+
+function loadSavedInto(id, slot) {
+  const item = Saved.get(id);
+  if (!item) return;
+  state[slot] = JSON.parse(JSON.stringify(item.scenario));
+  state.active = slot;
+  showView('inputs');
+  loadFormFromState();
+  recompute();
+  flash('Loaded “' + item.name + '” into Scenario ' + slot);
+}
+
+function savedSummary(sc) {
+  const res = project(sc);
+  const finalV = res.final.total;                 // nominal end value
+  const bits = [];
+  bits.push(sc.years + ' yr');
+  bits.push('salary ' + fmtMoney(num(sc.salary)));
+  if (num(sc.contrib401k) > 0) bits.push('401k ' + fmtMoney(num(sc.contrib401k)));
+  if (num(sc.side_amount) > 0) bits.push('side ' + fmtMoney(num(sc.side_amount)));
+  if (sc.stopWork) bits.push('retires yr ' + clampInt(sc.stopYear, 0, sc.years));
+  return { finalV, meta: bits.join(' · ') };
+}
+
+function renderSavedList() {
+  const wrap = document.getElementById('saved-list');
+  const empty = document.getElementById('saved-empty');
+  const count = document.getElementById('saved-count');
+  count.textContent = Saved.list.length;
+  empty.hidden = Saved.list.length > 0;
+  wrap.innerHTML = Saved.list.map(item => {
+    const { finalV, meta } = savedSummary(item.scenario);
+    return `<div class="saved-card" data-id="${item.id}">
+      <div class="sc-top">
+        <span class="sc-name">${escapeHTML(item.name)}</span>
+        <span class="sc-final">${fmtMoney(finalV)}</span>
+      </div>
+      <div class="sc-meta">${meta} → end net worth (nominal)</div>
+      <div class="sc-actions">
+        <button class="load-a" data-act="loadA">Load → A</button>
+        <button class="load-b" data-act="loadB">Load → B</button>
+        <button data-act="rename">Rename</button>
+        <button class="del" data-act="del">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function showView(which) {
+  const inputs = which === 'inputs';
+  document.getElementById('view-inputs').hidden = !inputs;
+  document.getElementById('view-saved').hidden = inputs;
+  document.getElementById('vt-inputs').classList.toggle('active', inputs);
+  document.getElementById('vt-saved').classList.toggle('active', !inputs);
+  if (!inputs) renderSavedList();
+}
+
+/* ============================================================
    EVENTS / WIRING
    ============================================================ */
 function wire() {
@@ -770,6 +870,49 @@ function wire() {
   document.getElementById('add-event').addEventListener('click', () => {
     scn().events.push({ year: Math.min(5, scn().years), type:'add', bucket:'stocks', amount: 10000 });
     renderEvents(); recompute();
+  });
+
+  // view tabs (Inputs / Saved)
+  document.getElementById('vt-inputs').addEventListener('click', () => showView('inputs'));
+  document.getElementById('vt-saved').addEventListener('click', () => showView('saved'));
+
+  // save flow (inline name row)
+  const saveRow = document.getElementById('save-row');
+  const saveName = document.getElementById('save-name');
+  document.getElementById('save-scn').addEventListener('click', () => {
+    saveRow.hidden = false;
+    saveName.value = 'Scenario ' + state.active + ' — ' + new Date().toLocaleDateString();
+    saveName.focus(); saveName.select();
+  });
+  document.getElementById('save-cancel').addEventListener('click', () => { saveRow.hidden = true; });
+  function doSave() {
+    const name = saveName.value.trim();
+    if (!name) { saveName.focus(); return; }
+    saveActiveScenario(name);
+    saveRow.hidden = true;
+  }
+  document.getElementById('save-confirm').addEventListener('click', doSave);
+  saveName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+    if (e.key === 'Escape') { saveRow.hidden = true; }
+  });
+
+  // saved-list actions (delegated)
+  document.getElementById('saved-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = btn.closest('.saved-card').dataset.id;
+    const act = btn.dataset.act;
+    if (act === 'loadA') loadSavedInto(id, 'A');
+    else if (act === 'loadB') loadSavedInto(id, 'B');
+    else if (act === 'del') {
+      const item = Saved.get(id);
+      if (confirm('Delete “' + (item ? item.name : 'this') + '”?')) { Saved.remove(id); renderSavedList(); }
+    } else if (act === 'rename') {
+      const item = Saved.get(id);
+      const nn = prompt('Rename scenario:', item ? item.name : '');
+      if (nn && nn.trim()) { Saved.rename(id, nn.trim()); renderSavedList(); }
+    }
   });
 
   // scenario tabs
@@ -859,6 +1002,8 @@ function flash(msg) {
 // seed scenario B with a contrasting default so compare is meaningful out of the box
 state.B = defaultScenario();
 state.B.contrib401k = 15000;   // B = "max the 401k" decision
+Saved.load();
 loadFormFromState();
 wire();
+renderSavedList();
 recompute();
