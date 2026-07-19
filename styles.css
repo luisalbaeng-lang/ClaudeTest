@@ -182,6 +182,9 @@ input { font-family: inherit; }
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink); margin-bottom: 8px; cursor: pointer; }
 .check-row input { accent-color: var(--scn-a); width: 15px; height: 15px; }
 .retire-fields { margin-top: 4px; }
+.seg-mini { display: inline-flex; width: 100%; background: var(--field-bg); border: 1px solid var(--field-br); border-radius: 8px; padding: 2px; margin-bottom: 10px; }
+.segm { flex: 1; border: 0; background: transparent; color: var(--ink-2); padding: 6px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.segm.active { background: var(--scn-a); color: #fff; }
 
 .derived { font-size: 12px; color: var(--ink-2); margin: 4px 0 6px; padding: 8px 10px; background: var(--field-bg); border-radius: 8px; border: 1px solid var(--border); }
 .derived b { color: var(--ink); font-variant-numeric: tabular-nums; }

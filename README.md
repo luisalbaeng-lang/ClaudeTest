@@ -18,11 +18,16 @@ Open `index.html` in any browser — no build step, no server, no internet.
 - **The 401k decision** — route pre-tax dollars into the 401k instead of the
   brokerage, with employer match up to a % of salary. Pre-tax + match is the
   headline "decision" the compare view is built for.
-- **When you stop working** — set a retirement year (shown as an age). Salary and
-  401k contributions stop, spending switches to a retirement level (% of today's
-  expenses), and the model draws *down* your assets — brokerage, then cash, then
-  401k — to cover it. The read-out tells you whether the money lasts or runs dry,
-  and the chart marks the year with a 🏁 line.
+- **When you stop working** — two ways to set retirement:
+  - **Pick a year** — choose the year you stop (shown as an age).
+  - **Reach a $ target** — enter a target net worth and the app finds the
+    *earliest year* your projection reaches it — your financial-independence
+    year. If the target isn't reached within the horizon, it says so.
+
+  Either way, salary and 401k contributions then stop, spending switches to a
+  retirement level (% of today's expenses), and the model draws *down* your
+  assets — brokerage, then cash, then 401k — to cover it. The read-out tells you
+  whether the money lasts or runs dry, and the chart marks the year with a 🏁 line.
 - **Side income** — a side gig / freelancing / rental stream with its own start
   year and growth rate. Put it on one scenario and bigger raises on the other to
   compare **career growth vs. a side gig** head-to-head.

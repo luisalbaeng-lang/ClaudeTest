@@ -26,7 +26,7 @@ function defaultScenario() {
     // side income
     side_amount: 0, side_start: 1, side_growth: 5,
     // retirement / stop working
-    stopWork: false, stopYear: 25, retireSpendPct: 80,
+    stopWork: false, retireMode: 'year', stopYear: 25, retireTarget: 2000000, retireSpendPct: 80,
     // economy
     inflation: 3,
     // one-time events
@@ -38,7 +38,7 @@ const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_re','a_other',
   'g_stocks','g_retire','g_re','g_other',
   'salary','salaryGrowth','expenses','taxRate','contrib401k','matchCap',
-  'side_amount','side_start','side_growth','stopYear','retireSpendPct','inflation',
+  'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct','inflation',
 ];
 
 const state = {
@@ -52,7 +52,22 @@ const state = {
 /* ============================================================
    PROJECTION ENGINE
    ============================================================ */
-function project(s) {
+// Resolve the year earning stops. In "target" mode we find the earliest year
+// the (always-working) accumulation trajectory reaches the target net worth.
+// Returns a finite year, or null if the target isn't reached within the horizon.
+function resolveStopYear(s) {
+  if (!s.stopWork) return Infinity;
+  if ((s.retireMode || 'year') === 'target') {
+    const target = num(s.retireTarget);
+    if (target <= 0) return Infinity;
+    const accum = project(s, { overrideStopYear: Infinity }); // never-stop trajectory
+    for (const r of accum.rows) if (r.total >= target) return r.year;
+    return null; // not reached in horizon
+  }
+  return clampInt(s.stopYear, 0, s.years);
+}
+
+function project(s, opts = {}) {
   const yrs = clampInt(s.years, 1, 50);
   const inflR = pct(s.inflation);
   const gr = {
@@ -73,8 +88,13 @@ function project(s) {
   const salG = pct(s.salaryGrowth);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
-  const stopWork = !!s.stopWork;
-  const stopYear = stopWork ? clampInt(s.stopYear, 0, yrs) : Infinity;
+  // Determine the stop-working year (may be overridden by resolveStopYear to
+  // avoid recursion when computing the target-mode accumulation trajectory).
+  const targetMode = !!s.stopWork && (s.retireMode || 'year') === 'target';
+  const rawStop = opts.overrideStopYear !== undefined ? opts.overrideStopYear : resolveStopYear(s);
+  const targetReached = !(targetMode && rawStop === null);
+  const stopYear = (rawStop === null || rawStop === undefined) ? Infinity : rawStop;
+  const stopWorkActive = !!s.stopWork && isFinite(stopYear) && stopYear <= yrs;
   const retireSpend = pct(s.retireSpendPct);   // fraction of pre-retirement expenses
 
   // index events by year for quick lookup
@@ -165,7 +185,12 @@ function project(s) {
     firstNegSavingsYear,
     firstMillionYear,
     depletionYear,
-    stopWork, stopYear,
+    stopWork: stopWorkActive,
+    stopYear: isFinite(stopYear) ? stopYear : null,
+    targetMode,
+    targetReached,
+    targetValue: num(s.retireTarget),
+    atStop: (stopWorkActive && rows[stopYear]) ? rows[stopYear].total : null,
     inflR,
   };
 }
@@ -226,6 +251,12 @@ function loadFormFromState() {
   document.getElementById('stopYear-out').textContent = s.stopYear;
   document.getElementById('stopWork').checked = !!s.stopWork;
   document.getElementById('retire-fields').hidden = !s.stopWork;
+  // retirement trigger mode (year vs money target)
+  const mode = s.retireMode || 'year';
+  document.querySelectorAll('#retire-mode .segm').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode));
+  document.getElementById('mode-year').hidden = mode !== 'year';
+  document.getElementById('mode-target').hidden = mode !== 'target';
   renderEvents();
   // toolbar state
   document.querySelectorAll('.stab').forEach(b =>
@@ -257,6 +288,8 @@ function readFormIntoState() {
     }
   });
   s.stopWork = document.getElementById('stopWork').checked;
+  const activeMode = document.querySelector('#retire-mode .segm.active');
+  s.retireMode = activeMode ? activeMode.dataset.mode : 'year';
   s.years = clampInt(s.years, 1, 50);
 }
 
@@ -337,10 +370,22 @@ function renderDerived() {
 
   const rd = document.getElementById('retire-derived');
   if (s.stopWork) {
-    const age = s.currentAge != null ? ' (age ' + (Number(s.currentAge) + clampInt(s.stopYear,0,s.years)) + ')' : '';
-    rd.innerHTML = `You stop earning after <b>year ${clampInt(s.stopYear,0,s.years)}${age}</b>. ` +
-      `Spending then becomes <b>${fmtFull(num(s.expenses)*pct(s.retireSpendPct))}/yr</b> ` +
-      `(today's terms) and is drawn from savings.`;
+    const res = cache[state.active] || project(s);
+    const spend = `Spending then becomes <b>${fmtFull(num(s.expenses)*pct(s.retireSpendPct))}/yr</b> (today's terms), drawn from savings.`;
+    const ageOf = y => s.currentAge != null ? ' (age ' + (Number(s.currentAge) + y) + ')' : '';
+    if (res.targetMode) {
+      if (!res.targetReached) {
+        rd.innerHTML = `You don't reach <b>${fmtFull(res.targetValue)}</b> within ${s.years} years. ` +
+          `Save more, lower the target, or extend the horizon.`;
+      } else if (res.stopYear === 0) {
+        rd.innerHTML = `You already have <b>${fmtFull(res.targetValue)}</b> — you could stop working now. ` + spend;
+      } else {
+        rd.innerHTML = `You'd hit <b>${fmtFull(res.targetValue)}</b> in <b>year ${res.stopYear}${ageOf(res.stopYear)}</b> — ` +
+          `the earliest you could stop working. ` + spend;
+      }
+    } else {
+      rd.innerHTML = `You stop earning after <b>year ${res.stopYear}${ageOf(res.stopYear)}</b>. ` + spend;
+    }
   }
 }
 
@@ -656,16 +701,25 @@ function renderInsights() {
   // retirement feasibility (per scenario that models it)
   [['A', A, state.A], ['B', B, state.B]].forEach(([name, res, sc]) => {
     if (!state.compare && name !== state.active) return;
+    if (!sc.stopWork) return;
+
+    // target mode but the goal isn't reached within the horizon
+    if (res.targetMode && !res.targetReached) {
+      out.push(ins('warn','🎯',`<b>Scenario ${name}:</b> you never reach your <b>${fmtMoney(res.targetValue)}</b> target within ${yrs} years, so you couldn't stop working on this path. Save more, lower the target, or extend the horizon.`));
+      return;
+    }
     if (!res.stopWork) return;
+
     const sy = res.stopYear;
     const stopAge = sc.currentAge != null ? Number(sc.currentAge) + sy : null;
     const ageTxt = stopAge != null ? ` (age ${stopAge})` : '';
+    const targetTxt = res.targetMode ? `, hitting your <b>${fmtMoney(res.targetValue)}</b> target,` : '';
     if (res.depletionYear != null && res.depletionYear <= yrs) {
       const depAge = sc.currentAge != null ? Number(sc.currentAge) + res.depletionYear : null;
-      out.push(ins('warn','⛔',`<b>Scenario ${name}:</b> you stop working year ${sy}${ageTxt}, but savings run dry by <b>year ${res.depletionYear}${depAge!=null?` (age ${depAge})`:''}</b> — expenses outlast your money. Work longer, spend less in retirement, or save more before then.`));
+      out.push(ins('warn','⛔',`<b>Scenario ${name}:</b> you stop working year ${sy}${ageTxt}${targetTxt} but savings run dry by <b>year ${res.depletionYear}${depAge!=null?` (age ${depAge})`:''}</b> — expenses outlast your money. Work longer, spend less in retirement, or raise the target.`));
     } else {
       const endReal = basisVal(res.final.total, res.final.realFactor);
-      out.push(ins('good','✅',`<b>Scenario ${name}:</b> you can stop working year ${sy}${ageTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
+      out.push(ins('good','✅',`<b>Scenario ${name}:</b> you could stop working <b>year ${sy}</b>${ageTxt}${targetTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
     }
     if (stopAge != null && stopAge < 60 && num(sc.a_retire) > 0) {
       out.push(ins('warn','📋',`Scenario ${name} taps retirement savings before age 60 — real 401k/IRA withdrawals before 59½ usually carry a 10% penalty this model ignores. Bridge early years with brokerage/cash if you can.`));
@@ -789,18 +843,15 @@ function loadSavedInto(id, slot) {
 function savedSummary(sc) {
   const res = project(sc);
   const finalV = res.final.total;                 // nominal end value
-  let atStop = null, stopY = null;
-  if (sc.stopWork) {
-    stopY = clampInt(sc.stopYear, 0, sc.years);
-    const row = res.rows[stopY];                  // net worth the year earning stops
-    atStop = row ? row.total : null;
-  }
+  const atStop = res.atStop;                       // net worth the year earning stops
+  const stopY = res.stopYear;
   const bits = [];
   bits.push(sc.years + ' yr');
   bits.push('salary ' + fmtMoney(num(sc.salary)));
   if (num(sc.contrib401k) > 0) bits.push('401k ' + fmtMoney(num(sc.contrib401k)));
   if (num(sc.side_amount) > 0) bits.push('side ' + fmtMoney(num(sc.side_amount)));
-  if (sc.stopWork) bits.push('retires yr ' + stopY);
+  if (sc.stopWork && res.targetMode && !res.targetReached) bits.push('target not reached');
+  else if (res.stopWork) bits.push('retires yr ' + stopY);
   return { finalV, atStop, stopY, meta: bits.join(' · ') };
 }
 
@@ -883,6 +934,14 @@ function wire() {
     scn().events.push({ year: Math.min(5, scn().years), type:'add', bucket:'stocks', amount: 10000 });
     renderEvents(); recompute();
   });
+
+  // retirement trigger mode (year vs money target)
+  document.querySelectorAll('#retire-mode .segm').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('#retire-mode .segm').forEach(x => x.classList.toggle('active', x === b));
+    document.getElementById('mode-year').hidden = b.dataset.mode !== 'year';
+    document.getElementById('mode-target').hidden = b.dataset.mode !== 'target';
+    recompute();
+  }));
 
   // view tabs (Inputs / Saved)
   document.getElementById('vt-inputs').addEventListener('click', () => showView('inputs'));
