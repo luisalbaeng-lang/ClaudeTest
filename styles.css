@@ -185,6 +185,7 @@ input { font-family: inherit; }
 .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .sw-stocks { background: var(--c-stocks); }
 .sw-retire { background: var(--c-retire); }
+.sw-roth { background: var(--c-roth); }
 .sw-realestate { background: var(--c-realestate); }
 .sw-other { background: var(--c-other); }
 

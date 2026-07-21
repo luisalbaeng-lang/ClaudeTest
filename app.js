@@ -17,9 +17,9 @@ function defaultScenario() {
     years: 30,
     currentAge: null,
     // starting balances
-    a_stocks: 40000, a_retire: 60000, a_re: 120000, a_other: 20000,
+    a_stocks: 40000, a_retire: 60000, a_roth: 0, a_re: 120000, a_other: 20000,
     // growth rates (%)
-    g_stocks: 7, g_retire: 7, g_re: 4, g_other: 1,
+    g_stocks: 7, g_retire: 7, g_roth: 7, g_re: 4, g_other: 1,
     // cash flow
     salary: 110000, salaryGrowth: 3, expenses: 60000,
     // taxes (computed)
@@ -40,8 +40,8 @@ function defaultScenario() {
 }
 
 const FIELD_IDS = [
-  'years','currentAge','a_stocks','a_retire','a_re','a_other',
-  'g_stocks','g_retire','g_re','g_other',
+  'years','currentAge','a_stocks','a_retire','a_roth','a_re','a_other',
+  'g_stocks','g_retire','g_roth','g_re','g_other',
   'salary','salaryGrowth','expenses','dependents','contrib401k','matchCap','rothIRA',
   'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
@@ -197,7 +197,7 @@ function project(s, opts = {}) {
   const yrs = clampInt(s.years, 1, 50);
   const inflR = pct(s.inflation);
   const gr = {
-    stocks: pct(s.g_stocks), retire: pct(s.g_retire),
+    stocks: pct(s.g_stocks), retire: pct(s.g_retire), roth: pct(s.g_roth),
     realestate: pct(s.g_re), other: pct(s.g_other),
   };
   const age0 = s.currentAge != null ? Number(s.currentAge) : AGE_ASSUMED;
@@ -208,9 +208,11 @@ function project(s, opts = {}) {
     ? [{ basis: num(s.a_stocks) * DEFAULT_BASIS_FRAC, value: num(s.a_stocks) }] : [];
   const lotsTotal = () => lots.reduce((a, l) => a + l.value, 0);
 
-  let bal = { retire: num(s.a_retire), roth: 0, realestate: num(s.a_re), other: num(s.a_other) };
+  let bal = { retire: num(s.a_retire), roth: num(s.a_roth), realestate: num(s.a_re), other: num(s.a_other) };
   let rothConversions = [];        // {year, principal} — principal accessible after 5 yrs
-  let rothContribBasis = 0;        // direct Roth IRA contributions — accessible anytime
+  // direct Roth IRA contributions — accessible anytime. The starting balance is
+  // treated as contribution basis (typical for early savers; simplification).
+  let rothContribBasis = num(s.a_roth);
   let rothPrincipalUsed = 0;
 
   let salary = num(s.salary);
@@ -372,7 +374,7 @@ function project(s, opts = {}) {
     // 1) growth
     lots.forEach(l => { l.value *= (1 + gr.stocks); });
     bal.retire     *= (1 + gr.retire);
-    bal.roth       *= (1 + gr.retire);
+    bal.roth       *= (1 + gr.roth);
     bal.realestate *= (1 + gr.realestate);
     bal.other      *= (1 + gr.other);
 
