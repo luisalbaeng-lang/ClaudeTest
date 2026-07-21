@@ -24,8 +24,9 @@ function defaultScenario() {
     salary: 110000, salaryGrowth: 3, expenses: 60000,
     // taxes (computed)
     filingStatus: 'single', dependents: 0, stateWork: 'CA', stateRetire: 'CA',
-    // 401k + Roth IRA
-    contrib401k: 0, matchCap: 4, rothIRA: 0,
+    // 401k + Roth IRA. Match: employer pays matchRate% of your contribution,
+    // on contributions up to matchCap% of salary ("50% of the first 6%").
+    contrib401k: 0, matchRate: 100, matchCap: 4, rothIRA: 0,
     // side income
     side_amount: 0, side_start: 1, side_growth: 5,
     // retirement / stop working
@@ -42,7 +43,7 @@ function defaultScenario() {
 const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_roth','a_re','a_other',
   'g_stocks','g_retire','g_roth','g_re','g_other',
-  'salary','salaryGrowth','expenses','dependents','contrib401k','matchCap','rothIRA',
+  'salary','salaryGrowth','expenses','dependents','contrib401k','matchRate','matchCap','rothIRA',
   'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
 ];
@@ -221,6 +222,7 @@ function project(s, opts = {}) {
   let rothIRAC = num(s.rothIRA);   // annual Roth IRA contribution (limit is inflation-indexed)
   let side = num(s.side_amount);
   const matchCapR = pct(s.matchCap);
+  const matchRateR = pct(s.matchRate == null ? 100 : s.matchRate);
   const salG = pct(s.salaryGrowth);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
@@ -336,7 +338,7 @@ function project(s, opts = {}) {
     const salThis  = salary * earnFrac;
     const sideThis = sideOn ? side * earnFrac : 0;
     const contribThis = contrib * earnFrac;
-    const employerMatch = Math.min(contribThis, salThis * matchCapR);
+    const employerMatch = matchRateR * Math.min(contribThis, salThis * matchCapR);
     const wtax = workingYearTax(salThis, sideThis, contribThis, s, scale);
     // Social Security (inflation-adjusted) once the start age is reached
     const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
@@ -663,7 +665,8 @@ function renderDerived() {
   const wt = workingYearTax(num(s.salary), num(s.side_amount), num(s.contrib401k), s, 1);
   const takeHome = wt.takeHome;
   const save = takeHome - num(s.expenses);
-  const match = Math.min(num(s.contrib401k), num(s.salary) * pct(s.matchCap));
+  const match = pct(s.matchRate == null ? 100 : s.matchRate) *
+    Math.min(num(s.contrib401k), num(s.salary) * pct(s.matchCap));
   const cd = document.getElementById('cashflow-derived');
   cd.innerHTML = `Take-home ≈ <b>${fmtFull(takeHome)}</b> · after expenses, ` +
     `<b class="${save<0?'neg':''}">${fmtFull(save)}/yr</b> ` +
@@ -1101,15 +1104,24 @@ function renderInsights() {
 
   // 401k nudge
   const s = state[state.active];
-  if (num(s.contrib401k) === 0 && num(s.matchCap) > 0) {
-    const freeMatch = num(s.salary) * pct(s.matchCap);
+  if (num(s.contrib401k) === 0 && num(s.matchCap) > 0 && num(s.matchRate == null ? 100 : s.matchRate) > 0) {
+    const freeMatch = num(s.salary) * pct(s.matchCap) * pct(s.matchRate == null ? 100 : s.matchRate);
     out.push(ins('warn','🎁',`Scenario ${state.active} contributes $0 to the 401k, leaving up to <b>${fmtFull(freeMatch)}/yr</b> of employer match on the table. Try setting a contribution and compare.`));
   }
 
-  // contribution-limit awareness (2026 employee elective ~ $24,500)
-  const LIMIT = 24500;
+  // contribution-limit awareness. The ~$24,500 (2026) employee elective limit
+  // covers only YOUR deferrals — employer match sits on top, bounded by the
+  // combined employee+employer limit (~$72,000).
+  const LIMIT = 24500, COMBINED_LIMIT = 72000;
+  const matchNow = pct(s.matchRate == null ? 100 : s.matchRate) *
+    Math.min(num(s.contrib401k), num(s.salary) * pct(s.matchCap));
   if (num(s.contrib401k) > LIMIT) {
-    out.push(ins('warn','📋',`Your 401k contribution (${fmtFull(num(s.contrib401k))}) exceeds the 2026 employee limit of about ${fmtFull(LIMIT)}. Real plans cap this — treat amounts above it as illustrative.`));
+    out.push(ins('warn','📋',`Your 401k contribution (${fmtFull(num(s.contrib401k))}) exceeds the ~${fmtFull(LIMIT)} employee limit (2026). Employer match doesn't count against that limit — but your own deferrals do. Treat the excess as illustrative.`));
+  } else if (num(s.contrib401k) === LIMIT && matchNow > 0) {
+    out.push(ins('good','✅',`Maxing the employee limit (${fmtFull(LIMIT)}) plus <b>${fmtFull(matchNow)}</b> employer match is fine — the match sits on top, under the ~${fmtFull(COMBINED_LIMIT)} combined cap.`));
+  }
+  if (num(s.contrib401k) + matchNow > COMBINED_LIMIT) {
+    out.push(ins('warn','📋',`Your contribution + employer match (${fmtFull(num(s.contrib401k) + matchNow)}) exceeds the ~${fmtFull(COMBINED_LIMIT)} combined annual limit.`));
   }
   // Roth IRA limit + income phase-out awareness
   const IRA_LIMIT = (s.currentAge != null && Number(s.currentAge) >= 50) ? 8000 : 7000;
