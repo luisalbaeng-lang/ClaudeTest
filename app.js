@@ -805,12 +805,16 @@ function chartDims(svg) {
   };
 }
 
-function niceMax(v) {
-  if (v <= 0) return 1;
-  const mag = Math.pow(10, Math.floor(Math.log10(v)));
-  const n = v / mag;
-  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return step * mag;
+// Pick a tick step ~1/5 of the range from the 1-2-2.5-5 ladder, and a max that
+// is the next multiple of it. Much gentler than snapping the max itself to
+// 1-2-5-10 (which made the whole curve visually halve when crossing $5M→$10M).
+function niceAxis(v) {
+  if (v <= 0) return { max: 1, step: 0.2 };
+  const rough = v / 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const n = rough / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  return { max: Math.ceil(v / step) * step, step };
 }
 
 function renderTotalChart() {
@@ -822,16 +826,15 @@ function renderTotalChart() {
   const seriesA = A.map(r => basisVal(r.total, r.realFactor));
   const seriesB = B.map(r => basisVal(r.total, r.realFactor));
   let maxV = Math.max(...seriesA, ...(state.compare ? seriesB : [0]));
-  maxV = niceMax(maxV * 1.05);
+  const ax = niceAxis(maxV * 1.05);
+  maxV = ax.max;
 
   const X = t => d.x0 + (yrs === 0 ? 0 : (t / yrs) * d.iw);
   const Y = v => d.y0 - (v / maxV) * d.ih;
 
   let svgEl = '';
   // gridlines + y labels
-  const ticks = 5;
-  for (let i = 0; i <= ticks; i++) {
-    const v = (maxV / ticks) * i;
+  for (let v = 0; v <= maxV + 1e-9; v += ax.step) {
     const y = Y(v);
     svgEl += `<line class="grid-line" x1="${d.x0}" y1="${y}" x2="${d.x1}" y2="${y}"/>`;
     svgEl += `<text class="axis-label" x="${d.x0 - 8}" y="${y + 3}" text-anchor="end">${fmtMoney(v)}</text>`;
@@ -927,15 +930,15 @@ function renderCompoChart() {
     };
   });
   let maxV = Math.max(...stacks.map(s => s.retire+s.roth+s.stocks+s.realestate+s.other));
-  maxV = niceMax(maxV * 1.05);
+  const ax = niceAxis(maxV * 1.05);
+  maxV = ax.max;
 
   const X = t => d.x0 + (yrs===0?0:(t/yrs)*d.iw);
   const Y = v => d.y0 - (v/maxV)*d.ih;
 
   let svgEl = '';
-  const ticks = 5;
-  for (let i=0;i<=ticks;i++){
-    const v=(maxV/ticks)*i, y=Y(v);
+  for (let v=0; v<=maxV+1e-9; v+=ax.step){
+    const y=Y(v);
     svgEl += `<line class="grid-line" x1="${d.x0}" y1="${y}" x2="${d.x1}" y2="${y}"/>`;
     svgEl += `<text class="axis-label" x="${d.x0-8}" y="${y+3}" text-anchor="end">${fmtMoney(v)}</text>`;
   }
