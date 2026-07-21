@@ -21,7 +21,7 @@ function defaultScenario() {
     // growth rates (%)
     g_stocks: 7, g_retire: 7, g_roth: 7, g_re: 4, g_other: 1,
     // cash flow
-    salary: 110000, salaryGrowth: 3, expenses: 60000,
+    salary: 110000, salaryGrowth: 3, bonusPct: 0, expenses: 60000,
     // taxes (computed)
     filingStatus: 'single', dependents: 0, stateWork: 'CA', stateRetire: 'CA',
     // 401k + Roth IRA. Match: employer pays matchRate% of your contribution,
@@ -43,7 +43,7 @@ function defaultScenario() {
 const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_roth','a_re','a_other',
   'g_stocks','g_retire','g_roth','g_re','g_other',
-  'salary','salaryGrowth','expenses','dependents','contrib401k','matchRate','matchCap','rothIRA',
+  'salary','salaryGrowth','bonusPct','expenses','dependents','contrib401k','matchRate','matchCap','rothIRA',
   'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
 ];
@@ -223,6 +223,7 @@ function project(s, opts = {}) {
   let side = num(s.side_amount);
   const matchCapR = pct(s.matchCap);
   const matchRateR = pct(s.matchRate == null ? 100 : s.matchRate);
+  const bonusR = pct(s.bonusPct);
   const salG = pct(s.salaryGrowth);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
@@ -336,10 +337,12 @@ function project(s, opts = {}) {
 
     // --- cash flow for year t ---
     const salThis  = salary * earnFrac;
+    const bonusThis = salThis * bonusR;            // performance bonus — wages, FICA applies
     const sideThis = sideOn ? side * earnFrac : 0;
     const contribThis = contrib * earnFrac;
+    // match is computed on base salary, not bonus (the common plan design)
     const employerMatch = matchRateR * Math.min(contribThis, salThis * matchCapR);
-    const wtax = workingYearTax(salThis, sideThis, contribThis, s, scale);
+    const wtax = workingYearTax(salThis + bonusThis, sideThis, contribThis, s, scale);
     // Social Security (inflation-adjusted) once the start age is reached
     const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
     // expenses: working level while working/job-hunting; retirement level after
@@ -364,7 +367,7 @@ function project(s, opts = {}) {
       realestate: bal.realestate, other: bal.other,
       total,
       realFactor: scale,
-      salary: salThis, sideIncome: sideThis, ss: ssThis, expenses: expThis,
+      salary: salThis, bonus: bonusThis, sideIncome: sideThis, ss: ssThis, expenses: expThis,
       contrib: contribThis, employerMatch, rothContrib: rothCThis, brokerageSavings,
       working: earnFrac > 0, taxes: taxesThis, effRate: wtax.effRate,
     });
@@ -386,7 +389,7 @@ function project(s, opts = {}) {
     if (brokerageSavings >= 0) {
       if (brokerageSavings > 0) lots.push({ basis: brokerageSavings, value: brokerageSavings });
     } else {
-      const unmet = withdraw(-brokerageSavings, Math.max(0, salThis + sideThis - contribThis), t, scale);
+      const unmet = withdraw(-brokerageSavings, Math.max(0, salThis + bonusThis + sideThis - contribThis), t, scale);
       if (unmet > 1 && depletionYear === null) depletionYear = t + 1;
     }
 
@@ -394,7 +397,7 @@ function project(s, opts = {}) {
     //    up to the top of the 12% bracket (tax paid out of the converted amount)
     if (useLadder && retireFrac < 1 && age < 59.5 && bal.retire > 1) {
       const f = FED[status];
-      const ordYr = Math.max(0, salThis + sideThis - contribThis);
+      const ordYr = Math.max(0, salThis + bonusThis + sideThis - contribThis);
       const headroom = (f.std + f.br[1][0]) * scale - ordYr;
       if (headroom > 0) {
         const conv = Math.min(bal.retire, headroom);
@@ -662,9 +665,9 @@ function recompute() {
 
 function renderDerived() {
   const s = scn();
-  const wt = workingYearTax(num(s.salary), num(s.side_amount), num(s.contrib401k), s, 1);
+  const wt = workingYearTax(num(s.salary) * (1 + pct(s.bonusPct)), num(s.side_amount), num(s.contrib401k), s, 1);
   const takeHome = wt.takeHome;
-  const save = takeHome - num(s.expenses);
+  const save = takeHome - num(s.expenses) - num(s.rothIRA);
   const match = pct(s.matchRate == null ? 100 : s.matchRate) *
     Math.min(num(s.contrib401k), num(s.salary) * pct(s.matchCap));
   const cd = document.getElementById('cashflow-derived');
