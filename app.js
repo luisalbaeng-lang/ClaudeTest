@@ -5,7 +5,7 @@
 
 const ASSETS = [
   { key: 'retire',     label: '401k / retirement', varc: '--c-retire' },
-  { key: 'roth',       label: 'Roth (ladder)',      varc: '--c-roth' },
+  { key: 'roth',       label: 'Roth IRA',           varc: '--c-roth' },
   { key: 'stocks',     label: 'Brokerage / stocks', varc: '--c-stocks' },
   { key: 'realestate', label: 'Real estate',        varc: '--c-realestate' },
   { key: 'other',      label: 'Cash & other',       varc: '--c-other' },
@@ -24,8 +24,8 @@ function defaultScenario() {
     salary: 110000, salaryGrowth: 3, expenses: 60000,
     // taxes (computed)
     filingStatus: 'single', dependents: 0, stateWork: 'CA', stateRetire: 'CA',
-    // 401k
-    contrib401k: 0, matchCap: 4,
+    // 401k + Roth IRA
+    contrib401k: 0, matchCap: 4, rothIRA: 0,
     // side income
     side_amount: 0, side_start: 1, side_growth: 5,
     // retirement / stop working
@@ -42,7 +42,7 @@ function defaultScenario() {
 const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_re','a_other',
   'g_stocks','g_retire','g_re','g_other',
-  'salary','salaryGrowth','expenses','dependents','contrib401k','matchCap',
+  'salary','salaryGrowth','expenses','dependents','contrib401k','matchCap','rothIRA',
   'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
 ];
@@ -210,11 +210,13 @@ function project(s, opts = {}) {
 
   let bal = { retire: num(s.a_retire), roth: 0, realestate: num(s.a_re), other: num(s.a_other) };
   let rothConversions = [];        // {year, principal} — principal accessible after 5 yrs
+  let rothContribBasis = 0;        // direct Roth IRA contributions — accessible anytime
   let rothPrincipalUsed = 0;
 
   let salary = num(s.salary);
   let expenses = num(s.expenses);
   let contrib = num(s.contrib401k);
+  let rothIRAC = num(s.rothIRA);   // annual Roth IRA contribution (limit is inflation-indexed)
   let side = num(s.side_amount);
   const matchCapR = pct(s.matchCap);
   const salG = pct(s.salaryGrowth);
@@ -295,10 +297,11 @@ function project(s, opts = {}) {
     const fromOther = Math.min(bal.other, need);
     bal.other -= fromOther; need -= fromOther;
     if (need <= 1e-6) return 0;
-    // 3) Roth: seasoned conversion principal before 59½; everything after
+    // 3) Roth: direct contributions anytime + seasoned conversion principal
+    //    before 59½; the whole balance after
     let rothAccess;
     if (age >= 59.5) rothAccess = bal.roth;
-    else rothAccess = Math.max(0, rothConversions
+    else rothAccess = Math.max(0, rothContribBasis + rothConversions
       .filter(c => t - c.year >= 5).reduce((a, c) => a + c.principal, 0) - rothPrincipalUsed);
     const fromRoth = Math.min(bal.roth, rothAccess, need);
     bal.roth -= fromRoth; need -= fromRoth;
@@ -337,8 +340,10 @@ function project(s, opts = {}) {
     const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
     // expenses: working level while working/job-hunting; retirement level after
     const expThis = expenses * retireFrac + expenses * retireSpend * (1 - retireFrac);
+    // Roth IRA contribution (post-tax, needs earned income) funded from take-home
+    const rothCThis = earnFrac > 0 ? rothIRAC * earnFrac : 0;
     const cashIn = wtax.takeHome + ssThis;
-    const brokerageSavings = cashIn - expThis;   // negative => draw down
+    const brokerageSavings = cashIn - expThis - rothCThis;   // negative => draw down
     let taxesThis = wtax.tax;
 
     if (t > 0 && retireFrac >= 1 && lossFrac(t) === 0 && brokerageSavings < 0 && firstNegSavingsYear === null) {
@@ -356,7 +361,7 @@ function project(s, opts = {}) {
       total,
       realFactor: scale,
       salary: salThis, sideIncome: sideThis, ss: ssThis, expenses: expThis,
-      contrib: contribThis, employerMatch, brokerageSavings,
+      contrib: contribThis, employerMatch, rothContrib: rothCThis, brokerageSavings,
       working: earnFrac > 0, taxes: taxesThis, effRate: wtax.effRate,
     });
 
@@ -373,6 +378,7 @@ function project(s, opts = {}) {
 
     // 2) contributions / drawdown
     bal.retire += contribThis + employerMatch;
+    if (rothCThis > 0) { bal.roth += rothCThis; rothContribBasis += rothCThis; }
     if (brokerageSavings >= 0) {
       if (brokerageSavings > 0) lots.push({ basis: brokerageSavings, value: brokerageSavings });
     } else {
@@ -411,6 +417,7 @@ function project(s, opts = {}) {
     expenses *= (1 + inflR);
     side *= (1 + sideG);
     contrib *= (1 + salG);
+    rothIRAC *= (1 + inflR);       // IRS limit is inflation-indexed
     if (contrib > salary) contrib = salary;
   }
 
@@ -426,9 +433,19 @@ function project(s, opts = {}) {
     }
   }
 
+  // after-tax final value: subtract the embedded tax on unrealized brokerage
+  // gains (fed 15% + retirement state CG) and on the remaining pre-tax 401k
+  // (assume patient low-bracket withdrawals: ~12% fed + state income rate).
+  const endLots = lots.reduce((a, l) => ({ value: a.value + l.value, basis: a.basis + l.basis }), { value: 0, basis: 0 });
+  const finalRow = rows[rows.length - 1];
+  const embeddedCG = Math.max(0, endLots.value - endLots.basis) * (0.15 + stateCGRate(s.stateRetire));
+  const embedded401k = finalRow.retire * (0.12 + stateIncomeRate(s.stateRetire));
+  const finalAfterTax = finalRow.total - embeddedCG - embedded401k;
+
   return {
     rows,
-    final: rows[rows.length - 1],
+    final: finalRow,
+    finalAfterTax,
     firstNegSavingsYear,
     firstMillionYear,
     depletionYear,
@@ -659,9 +676,14 @@ function renderDerived() {
     `(federal + FICA + ${escapeHTML(stW.n)}). In retirement, stock sales are taxed at ` +
     `federal LTCG + <b>${cgR}%</b> ${escapeHTML(stR.n)}. Estimates, not tax advice.`;
   const kd = document.getElementById('k401-derived');
-  kd.innerHTML = num(s.contrib401k) > 0
-    ? `Employer adds <b>${fmtFull(match)}/yr</b> · total into 401k ≈ <b>${fmtFull(num(s.contrib401k)+match)}/yr</b>`
-    : `No 401k contribution set. Employer match only applies when you contribute.`;
+  const parts = [];
+  parts.push(num(s.contrib401k) > 0
+    ? `Employer adds <b>${fmtFull(match)}/yr</b> · total into 401k ≈ <b>${fmtFull(num(s.contrib401k)+match)}/yr</b>.`
+    : `No 401k contribution set. Employer match only applies when you contribute.`);
+  if (num(s.rothIRA) > 0) {
+    parts.push(`Roth IRA gets <b>${fmtFull(num(s.rothIRA))}/yr</b> — contributions stay withdrawable anytime (a bridge fund for early retirement).`);
+  }
+  kd.innerHTML = parts.join(' ');
 
   const sd = document.getElementById('side-derived');
   if (num(s.side_amount) > 0) {
@@ -744,7 +766,7 @@ function sumContribs(res) {
   let total = 0;
   for (let i = 0; i < res.rows.length - 1; i++) {
     const r = res.rows[i];
-    total += r.contrib + r.employerMatch + Math.max(0, r.brokerageSavings);
+    total += r.contrib + r.employerMatch + (r.rothContrib || 0) + Math.max(0, r.brokerageSavings);
   }
   return total;
 }
@@ -1053,6 +1075,17 @@ function renderInsights() {
     out.push(ins('warn','🎂',`No current age set — 401k access (59½) and Social Security rules assume age <b>${AGE_ASSUMED}</b> today. Enter your age for accurate timing.`));
   }
 
+  // after-tax truth: embedded taxes on unrealized gains + pre-tax 401k
+  {
+    const atA = basisVal(A.finalAfterTax, fa.realFactor);
+    if (state.compare) {
+      const atB = basisVal(B.finalAfterTax, fb.realFactor);
+      out.push(ins('good','⚖',`<b>After embedded taxes</b> (unrealized gains + pre-tax 401k, eventually owed): A ≈ <b>${fmtMoney(atA)}</b>, B ≈ <b>${fmtMoney(atB)}</b> — the fairer basis for comparing Roth vs. brokerage vs. 401k strategies.`));
+    } else {
+      out.push(ins('good','⚖',`<b>After embedded taxes</b>, your final number is worth ≈ <b>${fmtMoney(atA)}</b> — unrealized gains and the pre-tax 401k still owe tax when eventually tapped.`));
+    }
+  }
+
   // inflation reality check
   const nominalFinal = fa.total;
   const realFinal = fa.total / fa.realFactor;
@@ -1075,6 +1108,18 @@ function renderInsights() {
   const LIMIT = 24500;
   if (num(s.contrib401k) > LIMIT) {
     out.push(ins('warn','📋',`Your 401k contribution (${fmtFull(num(s.contrib401k))}) exceeds the 2026 employee limit of about ${fmtFull(LIMIT)}. Real plans cap this — treat amounts above it as illustrative.`));
+  }
+  // Roth IRA limit + income phase-out awareness
+  const IRA_LIMIT = (s.currentAge != null && Number(s.currentAge) >= 50) ? 8000 : 7000;
+  if (num(s.rothIRA) > IRA_LIMIT) {
+    out.push(ins('warn','📋',`Your Roth IRA contribution (${fmtFull(num(s.rothIRA))}) exceeds the ~${fmtFull(IRA_LIMIT)} annual limit${IRA_LIMIT===7000?' (under 50)':''}. Treat the excess as illustrative.`));
+  }
+  if (num(s.rothIRA) > 0) {
+    const magi = num(s.salary) + num(s.side_amount);
+    const phaseout = s.filingStatus === 'mfj' ? 236000 : 150000;
+    if (magi > phaseout) {
+      out.push(ins('warn','🚪',`Your income (~${fmtMoney(magi)}) is above the direct Roth IRA limit (~${fmtMoney(phaseout)} ${s.filingStatus==='mfj'?'MFJ':'single'}) — this plan assumes you contribute via a <b>backdoor Roth</b> (legal and common, but requires no pre-tax IRA balances to avoid pro-rata tax).`));
+    }
   }
 
   // composition drift
@@ -1113,7 +1158,7 @@ function renderTable() {
       `<td>${fmtFull(basisVal(r.other,f))}</td>` +
       `<td><b>${fmtFull(basisVal(r.total,f))}</b></td>` +
       `<td>${fmtFull(r.taxes||0)}</td>` +
-      `<td>${fmtFull(r.contrib + r.employerMatch + Math.max(0,r.brokerageSavings))}</td></tr>`;
+      `<td>${fmtFull(r.contrib + r.employerMatch + (r.rothContrib||0) + Math.max(0,r.brokerageSavings))}</td></tr>`;
   });
   h += '</tbody></table>';
   wrap.innerHTML = h;
