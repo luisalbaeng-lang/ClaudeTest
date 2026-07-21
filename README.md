@@ -11,10 +11,30 @@ Open `index.html` in any browser — no build step, no server, no internet.
 
 - **Per-asset projection** — 401k/retirement, brokerage/stocks, real-estate
   equity, and cash/other each grow at their own rate you set.
-- **Cash flow → savings** — gross salary (with annual raises), an effective tax
-  rate, and expenses (which track inflation) produce a take-home figure; whatever
-  is left flows into your post-tax brokerage automatically. A shortfall is drawn
-  back out of savings.
+- **Cash flow → savings** — gross salary (with annual raises) and expenses
+  (which track inflation) produce a take-home figure; whatever is left flows
+  into your post-tax brokerage automatically. A shortfall is drawn back out of
+  savings.
+- **Computed taxes** — no more guessing an effective rate. From filing status,
+  state (working and retirement can differ), and kids under 17, the app
+  estimates federal progressive brackets + standard deduction, FICA, a flat
+  effective state rate, and the Child Tax Credit. Bracket thresholds are indexed
+  to your inflation input so brackets don't "creep" in nominal projections.
+- **Tax-aware retirement drawdown** — the brokerage is tracked as tax lots
+  (initial holdings assume 60% basis / 40% unrealized gain; every year's savings
+  adds a new lot). Withdrawals sell **newest lots first**, paying federal LTCG
+  (stacked on ordinary income, incl. NIIT) plus **your retirement state's**
+  capital-gains rate — retiring in Texas vs. California visibly changes the
+  outcome. Order: brokerage → cash → seasoned Roth principal → 401k.
+- **Roth conversion ladder** — before 59½, retirement years convert 401k → Roth
+  up to the top of the 12% bracket (tax paid from the converted amount);
+  conversions become accessible after 5 years, avoiding the 10% penalty. Draws
+  that must hit the 401k early anyway pay the penalty, and the read-out shows
+  both. Social Security (inflation-adjusted, at your chosen start age) offsets
+  retirement spending.
+- **Catastrophic events** — job-loss entries: out of work starting year X for a
+  duration (¼-year steps), then returning at a % of your old salary (lost
+  leverage). Stress-test any plan with one or several.
 - **The 401k decision** — route pre-tax dollars into the 401k instead of the
   brokerage, with employer match up to a % of salary. Pre-tax + match is the
   headline "decision" the compare view is built for.
@@ -61,9 +81,14 @@ Open `index.html` in any browser — no build step, no server, no internet.
 ## Modeling notes & simplifications
 
 This is a planning tool, not a guarantee. It uses **smooth average returns** (no
-year-to-year market volatility), a single blended tax rate, and treats real
-estate as pure equity appreciation (no mortgage amortization). Contribution and
-expense growth are applied annually at year-end. See the disclaimer in-app.
+year-to-year market volatility) and treats real estate as pure equity
+appreciation (no mortgage amortization). Tax simplifications: state income tax
+is a flat effective-rate approximation (real states have brackets/credits);
+2025 federal tables indexed by your inflation input; side income skips
+self-employment tax; Social Security benefits are treated as untaxed; Roth
+conversion taxes are paid from the converted amount; Washington's LTCG excise
+is applied flat. Contribution and expense growth are applied annually at
+year-end. See the disclaimer in-app.
 
 ## Ideas for future inputs
 

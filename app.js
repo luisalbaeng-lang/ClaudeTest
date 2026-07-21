@@ -5,6 +5,7 @@
 
 const ASSETS = [
   { key: 'retire',     label: '401k / retirement', varc: '--c-retire' },
+  { key: 'roth',       label: 'Roth (ladder)',      varc: '--c-roth' },
   { key: 'stocks',     label: 'Brokerage / stocks', varc: '--c-stocks' },
   { key: 'realestate', label: 'Real estate',        varc: '--c-realestate' },
   { key: 'other',      label: 'Cash & other',       varc: '--c-other' },
@@ -20,26 +21,41 @@ function defaultScenario() {
     // growth rates (%)
     g_stocks: 7, g_retire: 7, g_re: 4, g_other: 1,
     // cash flow
-    salary: 110000, salaryGrowth: 3, expenses: 60000, taxRate: 24,
+    salary: 110000, salaryGrowth: 3, expenses: 60000,
+    // taxes (computed)
+    filingStatus: 'single', dependents: 0, stateWork: 'CA', stateRetire: 'CA',
     // 401k
     contrib401k: 0, matchCap: 4,
     // side income
     side_amount: 0, side_start: 1, side_growth: 5,
     // retirement / stop working
     stopWork: false, retireMode: 'year', stopYear: 25, retireTarget: 2000000, retireSpendPct: 80,
+    rothLadder: true, ssMonthly: 0, ssStartAge: 67,
     // economy
     inflation: 3,
-    // one-time events
+    // one-time events & setbacks
     events: [],
+    setbacks: [],
   };
 }
 
 const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_re','a_other',
   'g_stocks','g_retire','g_re','g_other',
-  'salary','salaryGrowth','expenses','taxRate','contrib401k','matchCap',
-  'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct','inflation',
+  'salary','salaryGrowth','expenses','dependents','contrib401k','matchCap',
+  'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
+  'ssMonthly','ssStartAge','inflation',
 ];
+const SELECT_IDS = ['filingStatus','stateWork','stateRetire'];
+
+// merge a (possibly older) saved scenario onto current defaults
+function migrateScenario(sc) {
+  const d = defaultScenario();
+  const out = Object.assign(d, sc || {});
+  out.events = Array.isArray(out.events) ? out.events : [];
+  out.setbacks = Array.isArray(out.setbacks) ? out.setbacks : [];
+  return out;
+}
 
 const state = {
   active: 'A',
@@ -48,6 +64,104 @@ const state = {
   A: defaultScenario(),
   B: defaultScenario(),
 };
+
+/* ============================================================
+   TAX ENGINE (approximate — 2025 tables, bracket thresholds
+   indexed to the scenario's inflation so brackets don't "creep")
+   ============================================================ */
+// [upperBound, rate] pairs; Infinity-terminated
+const FED = {
+  single: { std: 15000, br: [[11925,.10],[48475,.12],[103350,.22],[197300,.24],[250525,.32],[626350,.35],[Infinity,.37]],
+            ltcg: [[48350,0],[533400,.15],[Infinity,.20]], niit: 200000, addlMed: 200000, ctcPhase: 200000 },
+  mfj:    { std: 30000, br: [[23850,.10],[96950,.12],[206700,.22],[394600,.24],[501050,.32],[751600,.35],[Infinity,.37]],
+            ltcg: [[96700,0],[600050,.15],[Infinity,.20]], niit: 250000, addlMed: 250000, ctcPhase: 400000 },
+};
+const SS_WAGE_BASE = 176100;
+const CTC_PER_KID = 2000;
+
+// Flat *effective* state income-tax approximations (real states have brackets,
+// deductions, credits — this is a planning estimate, labeled as such in the UI).
+// cg = long-term capital-gains rate where it differs from the income rate.
+const STATES = {
+  AK:{n:'Alaska',r:0}, AL:{n:'Alabama',r:5}, AR:{n:'Arkansas',r:3.9}, AZ:{n:'Arizona',r:2.5},
+  CA:{n:'California',r:8}, CO:{n:'Colorado',r:4.4}, CT:{n:'Connecticut',r:5.5}, DC:{n:'D.C.',r:7},
+  DE:{n:'Delaware',r:5.5}, FL:{n:'Florida',r:0}, GA:{n:'Georgia',r:5.2}, HI:{n:'Hawaii',r:7.9},
+  IA:{n:'Iowa',r:3.8}, ID:{n:'Idaho',r:5.3}, IL:{n:'Illinois',r:4.95}, IN:{n:'Indiana',r:3},
+  KS:{n:'Kansas',r:5.2}, KY:{n:'Kentucky',r:4}, LA:{n:'Louisiana',r:3}, MA:{n:'Massachusetts',r:5},
+  MD:{n:'Maryland',r:4.75}, ME:{n:'Maine',r:6.8}, MI:{n:'Michigan',r:4.25}, MN:{n:'Minnesota',r:7.5},
+  MO:{n:'Missouri',r:4.7}, MS:{n:'Mississippi',r:4.4}, MT:{n:'Montana',r:5.9}, NC:{n:'North Carolina',r:4.25},
+  ND:{n:'North Dakota',r:2.5}, NE:{n:'Nebraska',r:5.2}, NH:{n:'New Hampshire',r:0}, NJ:{n:'New Jersey',r:6},
+  NM:{n:'New Mexico',r:4.9}, NV:{n:'Nevada',r:0}, NY:{n:'New York',r:6}, OH:{n:'Ohio',r:3.1},
+  OK:{n:'Oklahoma',r:4.75}, OR:{n:'Oregon',r:8.75}, PA:{n:'Pennsylvania',r:3.07}, RI:{n:'Rhode Island',r:5.5},
+  SC:{n:'South Carolina',r:6.2,cg:3.4}, SD:{n:'South Dakota',r:0}, TN:{n:'Tennessee',r:0}, TX:{n:'Texas',r:0},
+  UT:{n:'Utah',r:4.55}, VA:{n:'Virginia',r:5.75}, VT:{n:'Vermont',r:6.6}, WA:{n:'Washington',r:0,cg:7},
+  WI:{n:'Wisconsin',r:5.3}, WV:{n:'West Virginia',r:4.8}, WY:{n:'Wyoming',r:0},
+};
+function stateIncomeRate(code) { const s = STATES[code]; return s ? s.r / 100 : 0; }
+function stateCGRate(code) { const s = STATES[code]; return s ? (s.cg != null ? s.cg : s.r) / 100 : 0; }
+
+// progressive tax over [upper, rate] brackets, thresholds scaled by `scale`
+function bracketTax(taxable, brackets, scale) {
+  let tax = 0, prev = 0;
+  for (const [up, rate] of brackets) {
+    const cap = up * scale;
+    if (taxable <= prev) break;
+    tax += (Math.min(taxable, cap) - prev) * rate;
+    prev = cap;
+  }
+  return tax;
+}
+// marginal fed LTCG rate for gains stacked on top of ordinary taxable income
+function fedLTCGTax(gain, ordTaxable, status, scale) {
+  const f = FED[status];
+  let tax = 0, prev = 0;
+  const lo = Math.max(0, ordTaxable), hi = lo + Math.max(0, gain);
+  for (const [up, rate] of f.ltcg) {
+    const cap = up * scale;
+    const a = Math.max(lo, prev), b = Math.min(hi, cap);
+    if (b > a) tax += (b - a) * rate;
+    prev = cap;
+    if (cap >= hi) break;
+  }
+  return tax;
+}
+
+// Full working-year tax: returns { tax, takeHome, effRate }
+function workingYearTax(wages, otherOrdIncome, pretax401k, s, scale) {
+  const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
+  const f = FED[status];
+  const gross = wages + otherOrdIncome;
+  const agi = Math.max(0, gross - pretax401k);
+  const taxable = Math.max(0, agi - f.std * scale);
+  let fed = bracketTax(taxable, f.br, scale);
+  // child tax credit w/ simple phaseout (5% above threshold)
+  const kids = clampInt(s.dependents || 0, 0, 10);
+  if (kids > 0) {
+    let ctc = kids * CTC_PER_KID;
+    const over = Math.max(0, agi - f.ctcPhase * scale);
+    ctc = Math.max(0, ctc - Math.ceil(over / 1000) * 50);
+    fed = Math.max(0, fed - ctc);
+  }
+  // FICA on wages only
+  const ss = Math.min(wages, SS_WAGE_BASE * scale) * 0.062;
+  const medicare = wages * 0.0145 + Math.max(0, wages - f.addlMed * scale) * 0.009;
+  // state (flat effective approximation on AGI less a nominal exemption)
+  const st = Math.max(0, agi - 5000 * scale) * stateIncomeRate(s.stateWork);
+  const tax = fed + ss + medicare + st;
+  return { tax, takeHome: gross - pretax401k - tax, effRate: gross > 0 ? tax / gross : 0 };
+}
+
+// Tax on ordinary income in retirement (401k withdrawals, Roth conversions)
+function retirementOrdTax(amount, alreadyOrd, s, scale) {
+  const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
+  const f = FED[status];
+  const stdLeft = f.std * scale;
+  const t0 = Math.max(0, alreadyOrd - stdLeft);
+  const t1 = Math.max(0, alreadyOrd + amount - stdLeft);
+  const fed = bracketTax(t1, f.br, scale) - bracketTax(t0, f.br, scale);
+  const st = amount * stateIncomeRate(s.stateRetire);
+  return fed + st;
+}
 
 /* ============================================================
    PROJECTION ENGINE
@@ -76,6 +190,9 @@ function resolveStopYear(s) {
   return clampNum(s.stopYear, 0, s.years);
 }
 
+const DEFAULT_BASIS_FRAC = 0.6;   // assume 40% of today's brokerage value is unrealized gain
+const AGE_ASSUMED = 35;            // used for 401k/SS rules when age isn't provided
+
 function project(s, opts = {}) {
   const yrs = clampInt(s.years, 1, 50);
   const inflR = pct(s.inflation);
@@ -83,20 +200,30 @@ function project(s, opts = {}) {
     stocks: pct(s.g_stocks), retire: pct(s.g_retire),
     realestate: pct(s.g_re), other: pct(s.g_other),
   };
+  const age0 = s.currentAge != null ? Number(s.currentAge) : AGE_ASSUMED;
+  const assumedAge = s.currentAge == null;
 
-  let bal = {
-    stocks: num(s.a_stocks), retire: num(s.a_retire),
-    realestate: num(s.a_re), other: num(s.a_other),
-  };
+  // brokerage as tax lots, newest LAST (sold newest-first from the end)
+  let lots = num(s.a_stocks) > 0
+    ? [{ basis: num(s.a_stocks) * DEFAULT_BASIS_FRAC, value: num(s.a_stocks) }] : [];
+  const lotsTotal = () => lots.reduce((a, l) => a + l.value, 0);
+
+  let bal = { retire: num(s.a_retire), roth: 0, realestate: num(s.a_re), other: num(s.a_other) };
+  let rothConversions = [];        // {year, principal} — principal accessible after 5 yrs
+  let rothPrincipalUsed = 0;
+
   let salary = num(s.salary);
   let expenses = num(s.expenses);
   let contrib = num(s.contrib401k);
   let side = num(s.side_amount);
-  const taxR = pct(s.taxRate);
   const matchCapR = pct(s.matchCap);
   const salG = pct(s.salaryGrowth);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
+  const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
+  const ssAnnual0 = num(s.ssMonthly) * 12;
+  const ssStartAge = clampNum(s.ssStartAge || 67, 50, 75);
+
   // Determine the stop-working year (may be overridden by resolveStopYear to
   // avoid recursion when computing the target-mode accumulation trajectory).
   const targetMode = !!s.stopWork && (s.retireMode || 'year') === 'target';
@@ -105,6 +232,21 @@ function project(s, opts = {}) {
   const stopYear = (rawStop === null || rawStop === undefined) ? Infinity : rawStop;
   const stopWorkActive = !!s.stopWork && isFinite(stopYear) && stopYear <= yrs;
   const retireSpend = pct(s.retireSpendPct);   // fraction of pre-retirement expenses
+  const useLadder = s.rothLadder !== false;
+
+  // setbacks: fraction of each year lost to a job gap + salary haircut at gap end
+  const setbacks = (s.setbacks || []).map(sb => ({
+    year: clampNum(sb.year, 0, yrs),
+    dur: clampNum(sb.dur, 0.25, 10),
+    recovery: clampNum(sb.recovery == null ? 100 : sb.recovery, 0, 200),
+  })).sort((a, b) => a.year - b.year);
+  const lossFrac = (t) => {
+    let lost = 0;
+    for (const sb of setbacks) {
+      lost += Math.max(0, Math.min(t + 1, sb.year + sb.dur) - Math.max(t, sb.year));
+    }
+    return Math.min(1, lost);
+  };
 
   // index events by year for quick lookup
   const evByYear = {};
@@ -117,80 +259,158 @@ function project(s, opts = {}) {
   let firstNegSavingsYear = null;
   let firstMillionYear = null;
   let depletionYear = null;        // year liquid assets can't cover spending
+  let lifetimeTax = 0, ladderConverted = 0, penaltyPaid = 0, cgTaxPaid = 0;
+
+  // --- tax-aware withdrawal for one year's shortfall; returns unmet need ---
+  function withdraw(need, ordIncomeYr, t, scale) {
+    const age = age0 + t;
+    let ordSoFar = ordIncomeYr;
+    // 1) sell brokerage lots, newest first, paying LTCG tax (fed stacked + state)
+    while (need > 1e-6 && lots.length) {
+      const lot = lots[lots.length - 1];
+      const gainFrac = lot.value > 0 ? Math.max(0, 1 - lot.basis / lot.value) : 0;
+      const f = FED[status];
+      const stdLeft = Math.max(0, f.std * scale - ordSoFar);
+      const ordTaxable = Math.max(0, ordSoFar - f.std * scale);
+      // marginal fed LTCG rate for this lot's gains stacked on ordinary income
+      const probe = Math.max(1, lot.value * gainFrac);
+      let fedRate = fedLTCGTax(probe, ordTaxable, status, scale) / probe;
+      // NIIT 3.8% once MAGI exceeds the threshold (approximate, on the gain)
+      if (ordSoFar + probe > f.niit * scale) fedRate += 0.038;
+      const rate = Math.min(0.55, fedRate + stateCGRate(s.stateRetire));
+      const netFrac = 1 - gainFrac * rate;      // net cash per gross $ sold
+      const grossNeeded = need / Math.max(0.45, netFrac);
+      const sell = Math.min(lot.value, grossNeeded);
+      const gain = sell * gainFrac;
+      const tax = gain * rate;
+      cgTaxPaid += tax; lifetimeTax += tax;
+      need -= (sell - tax);
+      lot.basis *= (1 - sell / lot.value);
+      lot.value -= sell;
+      if (lot.value <= 1) lots.pop();
+      void stdLeft;
+    }
+    if (need <= 1e-6) return 0;
+    // 2) cash & other — no tax
+    const fromOther = Math.min(bal.other, need);
+    bal.other -= fromOther; need -= fromOther;
+    if (need <= 1e-6) return 0;
+    // 3) Roth: seasoned conversion principal before 59½; everything after
+    let rothAccess;
+    if (age >= 59.5) rothAccess = bal.roth;
+    else rothAccess = Math.max(0, rothConversions
+      .filter(c => t - c.year >= 5).reduce((a, c) => a + c.principal, 0) - rothPrincipalUsed);
+    const fromRoth = Math.min(bal.roth, rothAccess, need);
+    bal.roth -= fromRoth; need -= fromRoth;
+    if (age < 59.5) rothPrincipalUsed += fromRoth;
+    if (need <= 1e-6) return 0;
+    // 4) 401k — ordinary income tax (+10% penalty before 59½)
+    while (need > 1e-6 && bal.retire > 1) {
+      const chunk = Math.min(bal.retire, need * 1.6);   // gross estimate incl. tax
+      const tax = retirementOrdTax(chunk, ordSoFar, s, scale);
+      const pen = age < 59.5 ? chunk * 0.10 : 0;
+      const net = chunk - tax - pen;
+      if (net <= 0) break;
+      bal.retire -= chunk;
+      ordSoFar += chunk;
+      lifetimeTax += tax + pen; penaltyPaid += pen;
+      need -= net;
+    }
+    return Math.max(0, need);
+  }
 
   for (let t = 0; t <= yrs; t++) {
-    // fraction of the year [t, t+1] spent working (supports fractional stop years,
-    // e.g. stopYear 25.25 => you work the first quarter of that transition year).
-    // Use Math.min/max directly so an infinite stopYear (never-stop trajectory)
-    // yields workFrac 1 — clampNum would fold Infinity to 0 via num().
-    const workFrac = Math.max(0, Math.min(1, stopYear - t));
-    const working = workFrac > 0;
-    const sideOn = side > 0 && t >= sideStart && workFrac > 0;
+    const scale = Math.pow(1 + inflR, t);     // brackets & deductions indexed to inflation
+    const age = age0 + t;
+    // fraction of the year worked: retirement cut × job-loss gaps
+    const retireFrac = Math.max(0, Math.min(1, stopYear - t));
+    const earnFrac = retireFrac * (1 - lossFrac(t));
+    const sideOn = side > 0 && t >= sideStart && earnFrac > 0;
 
-    // --- cash flow for year t (income/contributions prorated by fraction worked) ---
-    const salThis  = salary * workFrac;
-    const sideThis = sideOn ? side * workFrac : 0;
-    const contribThis = contrib * workFrac;
-    const gross = salThis + sideThis;
-    const taxableIncome = Math.max(0, gross - contribThis);
-    const takeHome = taxableIncome * (1 - taxR);
+    // --- cash flow for year t ---
+    const salThis  = salary * earnFrac;
+    const sideThis = sideOn ? side * earnFrac : 0;
+    const contribThis = contrib * earnFrac;
     const employerMatch = Math.min(contribThis, salThis * matchCapR);
-    // expenses: working level for the worked fraction, retirement level for the rest
-    const expThis = expenses * workFrac + expenses * retireSpend * (1 - workFrac);
-    const brokerageSavings = takeHome - expThis;   // negative => draw down
+    const wtax = workingYearTax(salThis, sideThis, contribThis, s, scale);
+    // Social Security (inflation-adjusted) once the start age is reached
+    const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
+    // expenses: working level while working/job-hunting; retirement level after
+    const expThis = expenses * retireFrac + expenses * retireSpend * (1 - retireFrac);
+    const cashIn = wtax.takeHome + ssThis;
+    const brokerageSavings = cashIn - expThis;   // negative => draw down
+    let taxesThis = wtax.tax;
 
-    // flag the first shortfall WHILE fully working (in retirement, negative is expected)
-    if (t > 0 && workFrac >= 1 && brokerageSavings < 0 && firstNegSavingsYear === null) {
+    if (t > 0 && retireFrac >= 1 && lossFrac(t) === 0 && brokerageSavings < 0 && firstNegSavingsYear === null) {
       firstNegSavingsYear = t;
     }
 
     // record the START-of-year snapshot as year t
-    const total = bal.stocks + bal.retire + bal.realestate + bal.other;
-    const realFactor = Math.pow(1 + inflR, t);
+    const stocksNow = lotsTotal();
+    const total = stocksNow + bal.retire + bal.roth + bal.realestate + bal.other;
     rows.push({
       year: t,
-      age: s.currentAge != null ? Number(s.currentAge) + t : null,
-      stocks: bal.stocks, retire: bal.retire,
+      age: s.currentAge != null ? age : null,
+      stocks: stocksNow, retire: bal.retire, roth: bal.roth,
       realestate: bal.realestate, other: bal.other,
       total,
-      realFactor,
-      salary: salThis, sideIncome: sideThis, expenses: expThis,
-      contrib: contribThis, employerMatch, brokerageSavings, working,
+      realFactor: scale,
+      salary: salThis, sideIncome: sideThis, ss: ssThis, expenses: expThis,
+      contrib: contribThis, employerMatch, brokerageSavings,
+      working: earnFrac > 0, taxes: taxesThis, effRate: wtax.effRate,
     });
 
     if (firstMillionYear === null && total >= 1e6) firstMillionYear = t;
     if (t === yrs) break;
 
     // --- advance one year ---
-    // 1) growth on existing balances
-    bal.stocks     *= (1 + gr.stocks);
+    // 1) growth
+    lots.forEach(l => { l.value *= (1 + gr.stocks); });
     bal.retire     *= (1 + gr.retire);
+    bal.roth       *= (1 + gr.retire);
     bal.realestate *= (1 + gr.realestate);
     bal.other      *= (1 + gr.other);
 
-    // 2) contributions added at year end
+    // 2) contributions / drawdown
     bal.retire += contribThis + employerMatch;
     if (brokerageSavings >= 0) {
-      bal.stocks += brokerageSavings;
+      if (brokerageSavings > 0) lots.push({ basis: brokerageSavings, value: brokerageSavings });
     } else {
-      // shortfall drawn in order: brokerage -> cash/other -> 401k (home equity untouched)
-      let need = -brokerageSavings;
-      for (const k of ['stocks', 'other', 'retire']) {
-        const take = Math.min(bal[k], need);
-        bal[k] -= take; need -= take;
-        if (need <= 1e-6) break;
-      }
-      if (need > 1 && depletionYear === null) depletionYear = t + 1;
+      const unmet = withdraw(-brokerageSavings, Math.max(0, salThis + sideThis - contribThis), t, scale);
+      if (unmet > 1 && depletionYear === null) depletionYear = t + 1;
     }
 
-    // 3) one-time events applied at the END of year t (affect year t+1 snapshot)
-    (evByYear[t + 1] || []).forEach(e => applyEvent(bal, e));
+    // 3) Roth conversion ladder: in retirement before 59½, convert 401k → Roth
+    //    up to the top of the 12% bracket (tax paid out of the converted amount)
+    if (useLadder && retireFrac < 1 && age < 59.5 && bal.retire > 1) {
+      const f = FED[status];
+      const ordYr = Math.max(0, salThis + sideThis - contribThis);
+      const headroom = (f.std + f.br[1][0]) * scale - ordYr;
+      if (headroom > 0) {
+        const conv = Math.min(bal.retire, headroom);
+        const ctax = retirementOrdTax(conv, ordYr, s, scale);
+        bal.retire -= conv;
+        bal.roth += conv - ctax;
+        rothConversions.push({ year: t + 1, principal: conv - ctax });
+        ladderConverted += conv;
+        lifetimeTax += ctax;
+      }
+    }
 
-    // 4) grow the drivers for next year
+    // 4) one-time events at END of year t
+    (evByYear[t + 1] || []).forEach(e => applyEvent(bal, lots, e));
+
+    // 5) salary haircut when a job-loss gap ends within (t, t+1]
+    for (const sb of setbacks) {
+      const end = sb.year + sb.dur;
+      if (end > t && end <= t + 1) salary *= sb.recovery / 100;
+    }
+
+    // 6) grow the drivers
     salary *= (1 + salG);
-    expenses *= (1 + inflR);        // expenses track inflation
+    expenses *= (1 + inflR);
     side *= (1 + sideG);
-    contrib *= (1 + salG);          // contribution grows with pay (bounded by salary)
+    contrib *= (1 + salG);
     if (contrib > salary) contrib = salary;
   }
 
@@ -218,15 +438,29 @@ function project(s, opts = {}) {
     targetReached,
     targetValue: num(s.retireTarget),
     atStop,
+    lifetimeTax, ladderConverted, penaltyPaid, cgTaxPaid,
+    assumedAge,
     inflR,
   };
 }
 
-function applyEvent(bal, e) {
+function applyEvent(bal, lots, e) {
   const amt = num(e.amount);
   if (!amt) return;
   const bucket = e.bucket || 'stocks';
   const sign = e.type === 'withdraw' ? -1 : 1;
+  if (bucket === 'stocks') {
+    if (sign > 0) { lots.push({ basis: amt, value: amt }); return; }
+    let need = amt;                 // event withdrawals: newest-first, untaxed (user-directed move)
+    while (need > 0 && lots.length) {
+      const lot = lots[lots.length - 1];
+      const take = Math.min(lot.value, need);
+      lot.basis *= (1 - take / lot.value);
+      lot.value -= take; need -= take;
+      if (lot.value <= 1) lots.pop();
+    }
+    return;
+  }
   const key = bucket === 're' ? 'realestate' : bucket;
   if (bal[key] == null) return;
   bal[key] = Math.max(0, bal[key] + sign * amt);
@@ -280,8 +514,13 @@ function loadFormFromState() {
     const key = mapId(id);
     el.value = s[key] == null ? '' : s[key];
   });
+  SELECT_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && s[id] != null) el.value = s[id];
+  });
   document.getElementById('years-out').textContent = s.years;
   document.getElementById('stopWork').checked = !!s.stopWork;
+  document.getElementById('rothLadder').checked = s.rothLadder !== false;
   document.getElementById('retire-fields').hidden = !s.stopWork;
   // retirement trigger mode (year vs money target)
   const mode = s.retireMode || 'year';
@@ -290,6 +529,7 @@ function loadFormFromState() {
   document.getElementById('mode-year').hidden = mode !== 'year';
   document.getElementById('mode-target').hidden = mode !== 'target';
   renderEvents();
+  renderSetbacks();
   // toolbar state
   document.querySelectorAll('.stab').forEach(b =>
     b.classList.toggle('active', b.dataset.scn === state.active));
@@ -319,7 +559,12 @@ function readFormIntoState() {
       s[key] = el.value === '' ? 0 : num(el.value);
     }
   });
+  SELECT_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) s[id] = el.value;
+  });
   s.stopWork = document.getElementById('stopWork').checked;
+  s.rothLadder = document.getElementById('rothLadder').checked;
   const activeMode = document.querySelector('#retire-mode .segm.active');
   s.retireMode = activeMode ? activeMode.dataset.mode : 'year';
   s.years = clampInt(s.years, 1, 50);
@@ -356,6 +601,27 @@ function renderEvents() {
   });
 }
 
+/* ---------- setbacks UI (job loss + salary haircut) ---------- */
+function renderSetbacks() {
+  const wrap = document.getElementById('setbacks-list');
+  const s = scn();
+  wrap.innerHTML = '';
+  (s.setbacks || []).forEach((sb, i) => {
+    const row = document.createElement('div');
+    row.className = 'event';
+    row.innerHTML = `
+      <div class="field"><label>Starts yr</label>
+        <input type="number" min="0" max="${s.years}" step="0.25" value="${sb.year}" data-sk="${i}" data-skk="year"></div>
+      <div class="field"><label>Out for (yrs)</label>
+        <input type="number" min="0.25" max="10" step="0.25" value="${sb.dur}" data-sk="${i}" data-skk="dur"></div>
+      <div class="field"><label>New salary %</label>
+        <input type="number" min="0" max="200" step="5" value="${sb.recovery}" data-sk="${i}" data-skk="recovery"></div>
+      <button class="del" title="Remove" data-skdel="${i}">×</button>
+    `;
+    wrap.appendChild(row);
+  });
+}
+
 /* ============================================================
    RENDER — top-level
    ============================================================ */
@@ -375,14 +641,23 @@ function recompute() {
 
 function renderDerived() {
   const s = scn();
-  const taxable = Math.max(0, num(s.salary) - num(s.contrib401k));
-  const takeHome = taxable * (1 - pct(s.taxRate));
+  const wt = workingYearTax(num(s.salary), num(s.side_amount), num(s.contrib401k), s, 1);
+  const takeHome = wt.takeHome;
   const save = takeHome - num(s.expenses);
   const match = Math.min(num(s.contrib401k), num(s.salary) * pct(s.matchCap));
   const cd = document.getElementById('cashflow-derived');
   cd.innerHTML = `Take-home ≈ <b>${fmtFull(takeHome)}</b> · after expenses, ` +
     `<b class="${save<0?'neg':''}">${fmtFull(save)}/yr</b> ` +
     (save < 0 ? 'shortfall (drawn from savings)' : 'flows to brokerage');
+
+  // computed tax panel
+  const td = document.getElementById('tax-derived');
+  const stW = STATES[s.stateWork] || { n: s.stateWork };
+  const stR = STATES[s.stateRetire] || { n: s.stateRetire };
+  const cgR = (stateCGRate(s.stateRetire) * 100).toFixed(1);
+  td.innerHTML = `Year-1 taxes ≈ <b>${fmtFull(wt.tax)}</b> — effective rate <b>${(wt.effRate*100).toFixed(1)}%</b> ` +
+    `(federal + FICA + ${escapeHTML(stW.n)}). In retirement, stock sales are taxed at ` +
+    `federal LTCG + <b>${cgR}%</b> ${escapeHTML(stR.n)}. Estimates, not tax advice.`;
   const kd = document.getElementById('k401-derived');
   kd.innerHTML = num(s.contrib401k) > 0
     ? `Employer adds <b>${fmtFull(match)}/yr</b> · total into 401k ≈ <b>${fmtFull(num(s.contrib401k)+match)}/yr</b>`
@@ -618,12 +893,13 @@ function renderCompoChart() {
     const f = r.realFactor;
     return {
       retire: basisVal(r.retire, f),
+      roth: basisVal(r.roth || 0, f),
       stocks: basisVal(r.stocks, f),
       realestate: basisVal(r.realestate, f),
       other: basisVal(r.other, f),
     };
   });
-  let maxV = Math.max(...stacks.map(s => s.retire+s.stocks+s.realestate+s.other));
+  let maxV = Math.max(...stacks.map(s => s.retire+s.roth+s.stocks+s.realestate+s.other));
   maxV = niceMax(maxV * 1.05);
 
   const X = t => d.x0 + (yrs===0?0:(t/yrs)*d.iw);
@@ -666,7 +942,7 @@ function renderCompoChart() {
 
   attachHover(svg, 'tt-compo', 'xh-compo', d, X, yrs, (t) => {
     const s = stacks[t];
-    const total = s.retire+s.stocks+s.realestate+s.other;
+    const total = s.retire+s.roth+s.stocks+s.realestate+s.other;
     const rows2 = ASSETS.map(a => ({ k:a.label, c:cssVar(a.varc), v:fmtFull(s[a.key]) }));
     rows2.push({ total:true, k:'Total', v:fmtFull(total) });
     return ttHTML('Year ' + t, rows2);
@@ -760,10 +1036,22 @@ function renderInsights() {
       const endReal = basisVal(res.final.total, res.final.realFactor);
       out.push(ins('good','✅',`<b>Scenario ${name}:</b> you could stop working <b>year ${fmtYear(sy)}</b>${ageTxt}${targetTxt} and your money lasts the full projection — ending around <b>${fmtMoney(endReal)}</b> (${state.basis}). The nest egg keeps covering you.`));
     }
-    if (stopAge != null && stopAge < 60 && num(sc.a_retire) > 0) {
-      out.push(ins('warn','📋',`Scenario ${name} taps retirement savings before age 60 — real 401k/IRA withdrawals before 59½ usually carry a 10% penalty this model ignores. Bridge early years with brokerage/cash if you can.`));
+    // Roth ladder / penalty outcomes (now actually modeled)
+    if (res.ladderConverted > 0) {
+      out.push(ins('good','🪜',`<b>Scenario ${name}:</b> the Roth conversion ladder moves <b>${fmtMoney(res.ladderConverted)}</b> out of the 401k at low bracket rates before 59½, avoiding the 10% early-withdrawal penalty.`));
+    }
+    if (res.penaltyPaid > 100) {
+      out.push(ins('warn','📋',`<b>Scenario ${name}:</b> pays <b>${fmtMoney(res.penaltyPaid)}</b> in 10% early-withdrawal penalties on pre-59½ 401k draws${sc.rothLadder === false ? ' — try enabling the Roth ladder' : ' (the ladder couldn’t season fast enough)'}.`));
+    }
+    if (res.cgTaxPaid > 100) {
+      out.push(ins('warn','🧾',`<b>Scenario ${name}:</b> selling stock (newest lots first) to fund retirement costs <b>${fmtMoney(res.cgTaxPaid)}</b> in capital-gains tax in ${escapeHTML((STATES[sc.stateRetire]||{}).n || sc.stateRetire)}. Lifetime taxes: <b>${fmtMoney(res.lifetimeTax)}</b>.`));
     }
   });
+
+  // age assumption notice
+  if ((state.A.stopWork || state.B.stopWork) && cache.A.assumedAge) {
+    out.push(ins('warn','🎂',`No current age set — 401k access (59½) and Social Security rules assume age <b>${AGE_ASSUMED}</b> today. Enter your age for accurate timing.`));
+  }
 
   // inflation reality check
   const nominalFinal = fa.total;
@@ -812,17 +1100,19 @@ function renderTable() {
   const res = cache[state.active];
   const s = state[state.active];
   let h = '<table><thead><tr><th>Year' + (s.currentAge!=null?' / age':'') + '</th>' +
-    '<th>401k</th><th>Brokerage</th><th>Real estate</th><th>Cash/other</th>' +
-    '<th>Total</th><th>Saved that yr</th></tr></thead><tbody>';
+    '<th>401k</th><th>Roth</th><th>Brokerage</th><th>Real estate</th><th>Cash/other</th>' +
+    '<th>Total</th><th>Taxes</th><th>Saved that yr</th></tr></thead><tbody>';
   res.rows.forEach(r => {
     const f = r.realFactor;
     const yl = r.year + (r.age!=null ? ' / ' + r.age : '');
     h += `<tr><td>${yl}</td>` +
       `<td>${fmtFull(basisVal(r.retire,f))}</td>` +
+      `<td>${fmtFull(basisVal(r.roth||0,f))}</td>` +
       `<td>${fmtFull(basisVal(r.stocks,f))}</td>` +
       `<td>${fmtFull(basisVal(r.realestate,f))}</td>` +
       `<td>${fmtFull(basisVal(r.other,f))}</td>` +
       `<td><b>${fmtFull(basisVal(r.total,f))}</b></td>` +
+      `<td>${fmtFull(r.taxes||0)}</td>` +
       `<td>${fmtFull(r.contrib + r.employerMatch + Math.max(0,r.brokerageSavings))}</td></tr>`;
   });
   h += '</tbody></table>';
@@ -871,7 +1161,7 @@ function saveActiveScenario(name) {
 function loadSavedInto(id, slot) {
   const item = Saved.get(id);
   if (!item) return;
-  state[slot] = JSON.parse(JSON.stringify(item.scenario));
+  state[slot] = migrateScenario(JSON.parse(JSON.stringify(item.scenario)));
   state.active = slot;
   showView('inputs');
   loadFormFromState();
@@ -879,7 +1169,8 @@ function loadSavedInto(id, slot) {
   flash('Loaded “' + item.name + '” into Scenario ' + slot);
 }
 
-function savedSummary(sc) {
+function savedSummary(scRaw) {
+  const sc = migrateScenario(JSON.parse(JSON.stringify(scRaw)));
   const res = project(sc);
   const finalV = res.final.total;                 // nominal end value
   const atStop = res.atStop;                       // net worth the year earning stops
@@ -956,7 +1247,24 @@ function wire() {
       scn().events[i][k] = k==='year' ? clampInt(e.target.value,1,scn().years) :
         (k==='amount' ? num(e.target.value) : e.target.value);
     }
+    // setback rows
+    if (e.target.dataset && e.target.dataset.skk) {
+      const i = +e.target.dataset.sk, k = e.target.dataset.skk;
+      scn().setbacks[i][k] = num(e.target.value);
+    }
     recompute();
+  });
+
+  // setback add/delete
+  document.getElementById('add-setback').addEventListener('click', () => {
+    scn().setbacks.push({ year: Math.min(3, scn().years), dur: 0.5, recovery: 85 });
+    renderSetbacks(); recompute();
+  });
+  document.getElementById('setbacks-list').addEventListener('click', (e) => {
+    if (e.target.dataset && e.target.dataset.skdel != null) {
+      scn().setbacks.splice(+e.target.dataset.skdel, 1);
+      renderSetbacks(); recompute();
+    }
   });
 
   // event delete
@@ -1106,8 +1414,17 @@ function flash(msg) {
 }
 
 /* ---------- boot ---------- */
+// populate the two state dropdowns (alphabetical by name)
+(function fillStates() {
+  const opts = Object.entries(STATES)
+    .sort((a, b) => a[1].n.localeCompare(b[1].n))
+    .map(([code, st]) => `<option value="${code}">${st.n}</option>`).join('');
+  document.getElementById('stateWork').innerHTML = opts;
+  document.getElementById('stateRetire').innerHTML = opts;
+})();
 // seed scenario B with a contrasting default so compare is meaningful out of the box
-state.B = defaultScenario();
+state.A = migrateScenario(state.A);
+state.B = migrateScenario(defaultScenario());
 state.B.contrib401k = 15000;   // B = "max the 401k" decision
 Saved.load();
 loadFormFromState();

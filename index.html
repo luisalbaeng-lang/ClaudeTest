@@ -127,11 +127,27 @@
               <div class="field"><label for="salary">Gross salary ($/yr)</label><input type="number" id="salary" min="0" step="1000" value="110000" /></div>
               <div class="field"><label for="salaryGrowth">Raises %/yr</label><input type="number" id="salaryGrowth" step="0.1" value="3" /></div>
             </div>
-            <div class="dual">
-              <div class="field"><label for="expenses">Expenses ($/yr)</label><input type="number" id="expenses" min="0" step="1000" value="60000" /></div>
-              <div class="field"><label for="taxRate">Eff. tax %</label><input type="number" id="taxRate" min="0" max="60" step="0.5" value="24" /></div>
-            </div>
+            <div class="field"><label for="expenses">Expenses ($/yr)</label><input type="number" id="expenses" min="0" step="1000" value="60000" /></div>
             <p class="derived" id="cashflow-derived"></p>
+          </section>
+
+          <!-- Taxes -->
+          <section class="group">
+            <h2>Taxes <span class="opt">(computed for you)</span></h2>
+            <p class="group-note">Federal brackets, FICA, state tax, and the Child Tax Credit — estimated from these facts. Capital-gains tax on retirement stock sales uses your retirement state.</p>
+            <div class="dual">
+              <div class="field"><label for="filingStatus">Filing status</label>
+                <select id="filingStatus" class="sel">
+                  <option value="single">Single</option>
+                  <option value="mfj">Married filing jointly</option>
+                </select></div>
+              <div class="field"><label for="dependents">Kids under 17</label><input type="number" id="dependents" min="0" max="10" step="1" value="0" /></div>
+            </div>
+            <div class="dual">
+              <div class="field"><label for="stateWork">State (working)</label><select id="stateWork" class="sel"></select></div>
+              <div class="field"><label for="stateRetire">State (retired)</label><select id="stateRetire" class="sel"></select></div>
+            </div>
+            <p class="derived" id="tax-derived"></p>
           </section>
 
           <!-- Side income -->
@@ -187,8 +203,24 @@
                 <label for="retireSpendPct">Retirement spending, % of today's expenses</label>
                 <input type="number" id="retireSpendPct" min="0" max="200" step="5" value="80" />
               </div>
+              <label class="check-row">
+                <input type="checkbox" id="rothLadder" checked />
+                <span>Use a Roth conversion ladder before 59½</span>
+              </label>
+              <div class="dual">
+                <div class="field"><label for="ssMonthly">Social Security ($/mo, today's $)</label><input type="number" id="ssMonthly" min="0" step="100" value="0" /></div>
+                <div class="field"><label for="ssStartAge">SS starts at age</label><input type="number" id="ssStartAge" min="62" max="70" step="1" value="67" /></div>
+              </div>
               <p class="derived" id="retire-derived"></p>
             </div>
+          </section>
+
+          <!-- Setbacks -->
+          <section class="group">
+            <h2>Catastrophic events <span class="opt">(optional)</span></h2>
+            <p class="group-note">Stress-test the plan: lose your job for a while, then return at a lower salary because you lost leverage.</p>
+            <div id="setbacks-list"></div>
+            <button type="button" class="mini-btn add" id="add-setback">+ Add job loss</button>
           </section>
 
           <!-- Assumptions -->

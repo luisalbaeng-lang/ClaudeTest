@@ -22,6 +22,7 @@
   /* asset composition */
   --c-stocks:     #008300;   /* green */
   --c-retire:     #2a78d6;   /* blue */
+  --c-roth:       #1baf7a;   /* aqua */
   --c-realestate: #4a3aa7;   /* violet */
   --c-other:      #eda100;   /* yellow */
 
@@ -48,6 +49,7 @@
   --scn-b: #d95926;
   --c-stocks:     #1aa11a;
   --c-retire:     #3987e5;
+  --c-roth:       #199e70;
   --c-realestate: #9085e9;
   --c-other:      #eda100;
 }
@@ -166,6 +168,11 @@ input { font-family: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .field input:focus { outline: 2px solid var(--scn-a); outline-offset: -1px; border-color: transparent; }
+.field select.sel {
+  border: 1px solid var(--field-br); background: var(--field-bg); color: var(--ink);
+  border-radius: 8px; padding: 8px 10px; font-size: 13.5px; width: 100%;
+}
+.field select.sel:focus { outline: 2px solid var(--scn-a); outline-offset: -1px; }
 .dual { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .dual .field { margin-bottom: 10px; }
 
