@@ -34,9 +34,10 @@ function defaultScenario() {
     rothLadder: true, ssMonthly: 0, ssStartAge: 67,
     // economy
     inflation: 3,
-    // one-time events & setbacks
+    // one-time events, setbacks & job changes
     events: [],
     setbacks: [],
+    jobChanges: [],
   };
 }
 
@@ -55,6 +56,7 @@ function migrateScenario(sc) {
   const out = Object.assign(d, sc || {});
   out.events = Array.isArray(out.events) ? out.events : [];
   out.setbacks = Array.isArray(out.setbacks) ? out.setbacks : [];
+  out.jobChanges = Array.isArray(out.jobChanges) ? out.jobChanges : [];
   return out;
 }
 
@@ -221,10 +223,18 @@ function project(s, opts = {}) {
   let contrib = num(s.contrib401k);
   let rothIRAC = num(s.rothIRA);   // annual Roth IRA contribution (limit is inflation-indexed)
   let side = num(s.side_amount);
-  const matchCapR = pct(s.matchCap);
-  const matchRateR = pct(s.matchRate == null ? 100 : s.matchRate);
-  const bonusR = pct(s.bonusPct);
-  const salG = pct(s.salaryGrowth);
+  // current-job parameters — a job change replaces all of these mid-projection
+  let curMatchCapR = pct(s.matchCap);
+  let curMatchRateR = pct(s.matchRate == null ? 100 : s.matchRate);
+  let curBonusR = pct(s.bonusPct);
+  let curSalG = pct(s.salaryGrowth);
+  const jobChanges = (s.jobChanges || []).map(j => ({
+    year: clampInt(j.year, 1, yrs),
+    salary: num(j.salary), growth: pct(j.growth),
+    bonus: pct(j.bonusPct),
+    matchRate: pct(j.matchRate == null ? 100 : j.matchRate),
+    matchCap: pct(j.matchCap),
+  })).sort((a, b) => a.year - b.year);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
   const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
@@ -330,6 +340,14 @@ function project(s, opts = {}) {
   for (let t = 0; t <= yrs; t++) {
     const scale = Math.pow(1 + inflR, t);     // brackets & deductions indexed to inflation
     const age = age0 + t;
+    // job change taking effect this year: new salary (today's $ → nominal) and terms
+    for (const jc of jobChanges) {
+      if (jc.year === t) {
+        salary = jc.salary * scale;
+        curSalG = jc.growth; curBonusR = jc.bonus;
+        curMatchRateR = jc.matchRate; curMatchCapR = jc.matchCap;
+      }
+    }
     // fraction of the year worked: retirement cut × job-loss gaps
     const retireFrac = Math.max(0, Math.min(1, stopYear - t));
     const earnFrac = retireFrac * (1 - lossFrac(t));
@@ -337,11 +355,11 @@ function project(s, opts = {}) {
 
     // --- cash flow for year t ---
     const salThis  = salary * earnFrac;
-    const bonusThis = salThis * bonusR;            // performance bonus — wages, FICA applies
+    const bonusThis = salThis * curBonusR;         // performance bonus — wages, FICA applies
     const sideThis = sideOn ? side * earnFrac : 0;
     const contribThis = contrib * earnFrac;
     // match is computed on base salary, not bonus (the common plan design)
-    const employerMatch = matchRateR * Math.min(contribThis, salThis * matchCapR);
+    const employerMatch = curMatchRateR * Math.min(contribThis, salThis * curMatchCapR);
     const wtax = workingYearTax(salThis + bonusThis, sideThis, contribThis, s, scale);
     // Social Security (inflation-adjusted) once the start age is reached
     const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
@@ -420,10 +438,10 @@ function project(s, opts = {}) {
     }
 
     // 6) grow the drivers
-    salary *= (1 + salG);
+    salary *= (1 + curSalG);
     expenses *= (1 + inflR);
     side *= (1 + sideG);
-    contrib *= (1 + salG);
+    contrib *= (1 + curSalG);
     rothIRAC *= (1 + inflR);       // IRS limit is inflation-indexed
     if (contrib > salary) contrib = salary;
   }
@@ -554,6 +572,7 @@ function loadFormFromState() {
   document.getElementById('mode-target').hidden = mode !== 'target';
   renderEvents();
   renderSetbacks();
+  renderJobs();
   // toolbar state
   document.querySelectorAll('.stab').forEach(b =>
     b.classList.toggle('active', b.dataset.scn === state.active));
@@ -641,6 +660,33 @@ function renderSetbacks() {
       <div class="field"><label>New salary %</label>
         <input type="number" min="0" max="200" step="5" value="${sb.recovery}" data-sk="${i}" data-skk="recovery"></div>
       <button class="del" title="Remove" data-skdel="${i}">×</button>
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+/* ---------- job changes UI ---------- */
+function renderJobs() {
+  const wrap = document.getElementById('jobs-list');
+  const s = scn();
+  wrap.innerHTML = '';
+  (s.jobChanges || []).forEach((j, i) => {
+    const row = document.createElement('div');
+    row.className = 'event';
+    row.innerHTML = `
+      <div class="field"><label>Start yr</label>
+        <input type="number" min="1" max="${s.years}" step="1" value="${j.year}" data-jc="${i}" data-jck="year"></div>
+      <div class="field"><label>Salary ($, today)</label>
+        <input type="number" min="0" step="1000" value="${j.salary}" data-jc="${i}" data-jck="salary"></div>
+      <div class="field"><label>Raises %/yr</label>
+        <input type="number" step="0.1" value="${j.growth}" data-jc="${i}" data-jck="growth"></div>
+      <button class="del" title="Remove" data-jcdel="${i}">×</button>
+      <div class="field"><label>Bonus %</label>
+        <input type="number" min="0" max="200" step="1" value="${j.bonusPct}" data-jc="${i}" data-jck="bonusPct"></div>
+      <div class="field"><label>Match % of contrib.</label>
+        <input type="number" min="0" max="200" step="5" value="${j.matchRate}" data-jc="${i}" data-jck="matchRate"></div>
+      <div class="field"><label>…on first % of salary</label>
+        <input type="number" min="0" max="50" step="0.5" value="${j.matchCap}" data-jc="${i}" data-jck="matchCap"></div>
     `;
     wrap.appendChild(row);
   });
@@ -1245,6 +1291,7 @@ function savedSummary(scRaw) {
   bits.push('salary ' + fmtMoney(num(sc.salary)));
   if (num(sc.contrib401k) > 0) bits.push('401k ' + fmtMoney(num(sc.contrib401k)));
   if (num(sc.side_amount) > 0) bits.push('side ' + fmtMoney(num(sc.side_amount)));
+  if ((sc.jobChanges || []).length > 0) bits.push(sc.jobChanges.length + ' job move' + (sc.jobChanges.length > 1 ? 's' : ''));
   if (sc.stopWork && res.targetMode && !res.targetReached) bits.push('target not reached');
   else if (res.stopWork) bits.push('retires yr ' + fmtYear(stopY));
   return { finalV, atStop, stopY, meta: bits.join(' · ') };
@@ -1317,7 +1364,29 @@ function wire() {
       const i = +e.target.dataset.sk, k = e.target.dataset.skk;
       scn().setbacks[i][k] = num(e.target.value);
     }
+    // job-change rows
+    if (e.target.dataset && e.target.dataset.jck) {
+      const i = +e.target.dataset.jc, k = e.target.dataset.jck;
+      scn().jobChanges[i][k] = num(e.target.value);
+    }
     recompute();
+  });
+
+  // job-change add/delete
+  document.getElementById('add-job').addEventListener('click', () => {
+    const s = scn();
+    s.jobChanges.push({
+      year: Math.min(3, s.years), salary: Math.round(num(s.salary) * 1.2),
+      growth: num(s.salaryGrowth), bonusPct: num(s.bonusPct),
+      matchRate: num(s.matchRate == null ? 100 : s.matchRate), matchCap: num(s.matchCap),
+    });
+    renderJobs(); recompute();
+  });
+  document.getElementById('jobs-list').addEventListener('click', (e) => {
+    if (e.target.dataset && e.target.dataset.jcdel != null) {
+      scn().jobChanges.splice(+e.target.dataset.jcdel, 1);
+      renderJobs(); recompute();
+    }
   });
 
   // setback add/delete
