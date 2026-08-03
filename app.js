@@ -29,7 +29,7 @@ function defaultScenario() {
     contrib401k: 0, matchRate: 100, matchCap: 4, rothIRA: 0,
     // side income (working years + optional retirement continuation)
     side_amount: 0, side_start: 1, side_growth: 5,
-    side_retire: 0, side_retire_growth: 0,
+    side_retire: 0, side_retire_growth: 0, side_retire_years: 0,
     // retirement / stop working
     stopWork: false, retireMode: 'year', stopYear: 25, retireTarget: 2000000, retireSpendPct: 80,
     rothLadder: true, ssMonthly: 0, ssStartAge: 67,
@@ -46,7 +46,7 @@ const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_roth','a_re','a_other',
   'g_stocks','g_retire','g_roth','g_re','g_other',
   'salary','salaryGrowth','bonusPct','expenses','dependents','contrib401k','matchRate','matchCap','rothIRA',
-  'side_amount','side_start','side_growth','side_retire','side_retire_growth',
+  'side_amount','side_start','side_growth','side_retire','side_retire_growth','side_retire_years',
   'stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
 ];
@@ -241,6 +241,7 @@ function project(s, opts = {}) {
   const sideStart = clampInt(s.side_start, 0, yrs);
   let sideRet = num(s.side_retire);        // retirement side income, today's $
   const sideRetG = pct(s.side_retire_growth);
+  const sideRetYears = clampNum(s.side_retire_years || 0, 0, 50);   // 0 = whole projection
   const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
   const ssAnnual0 = num(s.ssMonthly) * 12;
   const ssStartAge = clampNum(s.ssStartAge || 67, 50, 75);
@@ -361,8 +362,15 @@ function project(s, opts = {}) {
     const salThis  = salary * earnFrac;
     const bonusThis = salThis * curBonusR;         // performance bonus — wages, FICA applies
     const sideThis = sideOn ? side * earnFrac : 0;
-    // retirement side income covers the retired fraction of the year
-    const sideRetThis = sideRet > 0 ? sideRet * (1 - retireFrac) : 0;
+    // retirement side income: active in the window [stopYear, stopYear + N)
+    // (N = 0 means the whole projection); overlap prorates the partial years
+    // at both the start and the end of the semi-retirement stint
+    let sideRetThis = 0;
+    if (sideRet > 0 && isFinite(stopYear)) {
+      const winEnd = sideRetYears > 0 ? stopYear + sideRetYears : Infinity;
+      const frac = Math.max(0, Math.min(t + 1, winEnd) - Math.max(t, stopYear));
+      sideRetThis = sideRet * Math.min(1, frac);
+    }
     const contribThis = contrib * earnFrac;
     // match is computed on base salary, not bonus (the common plan design)
     const employerMatch = curMatchRateR * Math.min(contribThis, salThis * curMatchCapR);
@@ -758,9 +766,11 @@ function renderDerived() {
     sd.innerHTML = `Adds <b>${fmtFull(num(s.side_amount))}/yr</b> from year ${start} (taxed, then flows to savings)` +
       (s.stopWork ? `, until you stop working in year ${fmtYear(lastYr)}` : '') +
       `. Reaches <b>${fmtFull(endVal)}/yr</b> by then.` +
-      (num(s.side_retire) > 0 ? ` In retirement, <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) continues.` : '');
+      (num(s.side_retire) > 0 ? ` In retirement, <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) continues${num(s.side_retire_years) > 0 ? ` for <b>${fmtYear(num(s.side_retire_years))} yrs</b>` : ''}.` : '');
   } else if (num(s.side_retire) > 0) {
-    sd.innerHTML = `No side income while working, but <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) starts in retirement — it offsets drawdown and reduces how much stock you must sell.`;
+    sd.innerHTML = `No side income while working, but <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) starts in retirement` +
+      (num(s.side_retire_years) > 0 ? ` for <b>${fmtYear(num(s.side_retire_years))} years</b>` : '') +
+      ` — it offsets drawdown and reduces how much stock you must sell.`;
   } else {
     sd.innerHTML = `No side income. Try it on Scenario B against bigger raises on A.`;
   }
