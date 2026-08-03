@@ -27,8 +27,9 @@ function defaultScenario() {
     // 401k + Roth IRA. Match: employer pays matchRate% of your contribution,
     // on contributions up to matchCap% of salary ("50% of the first 6%").
     contrib401k: 0, matchRate: 100, matchCap: 4, rothIRA: 0,
-    // side income
+    // side income (working years + optional retirement continuation)
     side_amount: 0, side_start: 1, side_growth: 5,
+    side_retire: 0, side_retire_growth: 0,
     // retirement / stop working
     stopWork: false, retireMode: 'year', stopYear: 25, retireTarget: 2000000, retireSpendPct: 80,
     rothLadder: true, ssMonthly: 0, ssStartAge: 67,
@@ -45,7 +46,8 @@ const FIELD_IDS = [
   'years','currentAge','a_stocks','a_retire','a_roth','a_re','a_other',
   'g_stocks','g_retire','g_roth','g_re','g_other',
   'salary','salaryGrowth','bonusPct','expenses','dependents','contrib401k','matchRate','matchCap','rothIRA',
-  'side_amount','side_start','side_growth','stopYear','retireTarget','retireSpendPct',
+  'side_amount','side_start','side_growth','side_retire','side_retire_growth',
+  'stopYear','retireTarget','retireSpendPct',
   'ssMonthly','ssStartAge','inflation',
 ];
 const SELECT_IDS = ['filingStatus','stateWork','stateRetire'];
@@ -237,6 +239,8 @@ function project(s, opts = {}) {
   })).sort((a, b) => a.year - b.year);
   const sideG = pct(s.side_growth);
   const sideStart = clampInt(s.side_start, 0, yrs);
+  let sideRet = num(s.side_retire);        // retirement side income, today's $
+  const sideRetG = pct(s.side_retire_growth);
   const status = s.filingStatus === 'mfj' ? 'mfj' : 'single';
   const ssAnnual0 = num(s.ssMonthly) * 12;
   const ssStartAge = clampNum(s.ssStartAge || 67, 50, 75);
@@ -357,10 +361,12 @@ function project(s, opts = {}) {
     const salThis  = salary * earnFrac;
     const bonusThis = salThis * curBonusR;         // performance bonus — wages, FICA applies
     const sideThis = sideOn ? side * earnFrac : 0;
+    // retirement side income covers the retired fraction of the year
+    const sideRetThis = sideRet > 0 ? sideRet * (1 - retireFrac) : 0;
     const contribThis = contrib * earnFrac;
     // match is computed on base salary, not bonus (the common plan design)
     const employerMatch = curMatchRateR * Math.min(contribThis, salThis * curMatchCapR);
-    const wtax = workingYearTax(salThis + bonusThis, sideThis, contribThis, s, scale);
+    const wtax = workingYearTax(salThis + bonusThis, sideThis + sideRetThis, contribThis, s, scale);
     // Social Security (inflation-adjusted) once the start age is reached
     const ssThis = (ssAnnual0 > 0 && age >= ssStartAge) ? ssAnnual0 * scale : 0;
     // expenses: working level while working/job-hunting; retirement level after
@@ -385,7 +391,7 @@ function project(s, opts = {}) {
       realestate: bal.realestate, other: bal.other,
       total,
       realFactor: scale,
-      salary: salThis, bonus: bonusThis, sideIncome: sideThis, ss: ssThis, expenses: expThis,
+      salary: salThis, bonus: bonusThis, sideIncome: sideThis + sideRetThis, ss: ssThis, expenses: expThis,
       contrib: contribThis, employerMatch, rothContrib: rothCThis, brokerageSavings,
       working: earnFrac > 0, taxes: taxesThis, effRate: wtax.effRate,
     });
@@ -407,7 +413,7 @@ function project(s, opts = {}) {
     if (brokerageSavings >= 0) {
       if (brokerageSavings > 0) lots.push({ basis: brokerageSavings, value: brokerageSavings });
     } else {
-      const unmet = withdraw(-brokerageSavings, Math.max(0, salThis + bonusThis + sideThis - contribThis), t, scale);
+      const unmet = withdraw(-brokerageSavings, Math.max(0, salThis + bonusThis + sideThis + sideRetThis - contribThis), t, scale);
       if (unmet > 1 && depletionYear === null) depletionYear = t + 1;
     }
 
@@ -415,7 +421,7 @@ function project(s, opts = {}) {
     //    up to the top of the 12% bracket (tax paid out of the converted amount)
     if (useLadder && retireFrac < 1 && age < 59.5 && bal.retire > 1) {
       const f = FED[status];
-      const ordYr = Math.max(0, salThis + bonusThis + sideThis - contribThis);
+      const ordYr = Math.max(0, salThis + bonusThis + sideThis + sideRetThis - contribThis);
       const headroom = (f.std + f.br[1][0]) * scale - ordYr;
       if (headroom > 0) {
         const conv = Math.min(bal.retire, headroom);
@@ -441,6 +447,9 @@ function project(s, opts = {}) {
     salary *= (1 + curSalG);
     expenses *= (1 + inflR);
     side *= (1 + sideG);
+    // retirement side income: tracks inflation until retirement begins,
+    // then follows its own growth (can be negative to model winding down)
+    sideRet *= (t + 1 <= stopYear) ? (1 + inflR) : (1 + sideRetG);
     contrib *= (1 + curSalG);
     rothIRAC *= (1 + inflR);       // IRS limit is inflation-indexed
     if (contrib > salary) contrib = salary;
@@ -748,7 +757,10 @@ function renderDerived() {
     const endVal = num(s.side_amount) * Math.pow(1+pct(s.side_growth), Math.max(0, lastYr-start));
     sd.innerHTML = `Adds <b>${fmtFull(num(s.side_amount))}/yr</b> from year ${start} (taxed, then flows to savings)` +
       (s.stopWork ? `, until you stop working in year ${fmtYear(lastYr)}` : '') +
-      `. Reaches <b>${fmtFull(endVal)}/yr</b> by then.`;
+      `. Reaches <b>${fmtFull(endVal)}/yr</b> by then.` +
+      (num(s.side_retire) > 0 ? ` In retirement, <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) continues.` : '');
+  } else if (num(s.side_retire) > 0) {
+    sd.innerHTML = `No side income while working, but <b>${fmtFull(num(s.side_retire))}/yr</b> (today's $) starts in retirement — it offsets drawdown and reduces how much stock you must sell.`;
   } else {
     sd.innerHTML = `No side income. Try it on Scenario B against bigger raises on A.`;
   }
@@ -1561,6 +1573,12 @@ state.A = migrateScenario(state.A);
 state.B = migrateScenario(defaultScenario());
 state.B.contrib401k = 15000;   // B = "max the 401k" decision
 Saved.load();
+// resume from the most recent saved scenario as A, solo (no comparison)
+if (Saved.list.length > 0) {
+  state.A = migrateScenario(JSON.parse(JSON.stringify(Saved.list[0].scenario)));
+  state.compare = false;
+}
+document.getElementById('compare-on').checked = state.compare;
 loadFormFromState();
 wire();
 renderSavedList();

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -180,6 +180,11 @@
             <div class="field">
               <label for="side_start">Starts in year</label>
               <input type="number" id="side_start" min="0" step="1" value="1" />
+            </div>
+            <p class="group-note">Keep earning after you stop working — consulting, rentals, a wound-down business:</p>
+            <div class="dual">
+              <div class="field"><label for="side_retire">In retirement ($/yr, today)</label><input type="number" id="side_retire" min="0" step="1000" value="0" /></div>
+              <div class="field"><label for="side_retire_growth">Grows %/yr</label><input type="number" id="side_retire_growth" step="0.5" value="0" /></div>
             </div>
             <p class="derived" id="side-derived"></p>
           </section>
